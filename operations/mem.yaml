@@ -1,0 +1,5 @@
+name: mem
+description: Memory usage and top memory consumers
+risk: read
+run: |
+  free -m; ps -eo pid,pmem,rss,comm --sort=-pmem | head -15

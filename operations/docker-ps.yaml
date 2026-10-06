@@ -1,0 +1,4 @@
+name: docker-ps
+description: Running and recently exited containers
+risk: read
+run: docker ps -a --format 'table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Image}}' }}' | head -50

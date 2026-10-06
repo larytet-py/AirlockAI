@@ -1,0 +1,9 @@
+name: docker-purge
+description: Remove stopped containers, dangling images, build cache
+risk: destructive
+params:
+  - {name: keep_hours, type: int, default: 24, min: 1, max: 720}
+run: |
+  docker system prune -af --filter "until={{ keep_hours }}h"
+  df -h /var/lib/docker
+timeout: 300

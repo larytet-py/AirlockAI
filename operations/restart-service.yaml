@@ -1,0 +1,8 @@
+name: restart-service
+description: Restart a systemd unit and show its status
+risk: destructive
+params:
+  - {name: unit, type: str}
+run: |
+  systemctl restart {{ unit }}
+  systemctl status {{ unit }} --no-pager | head -15

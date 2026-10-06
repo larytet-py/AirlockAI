@@ -1,0 +1,4 @@
+name: top-ports
+description: Listening TCP ports and their processes
+risk: read
+run: ss -tlnp

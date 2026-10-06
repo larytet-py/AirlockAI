@@ -1,0 +1,115 @@
+# AirlockAI config template. Copy to ~/.airlock/airlock.yaml (or pass --config / set AIRLOCK_CONFIG) and edit.
+# This file is meant to be committed and shared: it never holds secrets, only references such as ${USER_NAME}.
+# Check it with:  airlock --config airlock.yaml config validate
+version: 1
+
+defaults:
+  # How to log in to nodes. In YAML, quote a ${VAR} reference when it sits inside {...}.
+  exec: {mode: ssh, user: "${USER_NAME}", auth: key}
+
+  # Extra egress hosts for the model API. Default: api.anthropic.com, claude.ai, claude.com, platform.claude.com
+  # egress: {model_api: [api.anthropic.com, claude.ai, claude.com, platform.claude.com]}
+
+  # Link patterns shown in every node row. {instance_id} is the EC2 id of the node: taken from the node's
+  # `instance_id`, else found in the host or name (e.g. i-0123456789abcdef0).
+  # Other placeholders: {name} {host} {user} {port}.
+  # A node whose instance id is unknown gets no link that needs it. Allowed schemes: http, https, ssh.
+  links:
+    web:  "https://web-{instance_id}.dev.example.com/"
+    docs: "https://docs-{instance_id}.dev.example.com/"
+    ssh:  "ssh://{user}@{instance_id}.example.com"
+    # PROD tab rows (clusters) accept only {name} and {context}; a pattern with other placeholders is skipped there.
+    grafana: "https://grafana.example.com/d/k8s?var-cluster={context}"
+
+nodes:
+  # Name nodes after owner + environment + service. Nodes carry no tags: sessions and operations are bound to explicit nodes.
+  # Sandbox sessions log in with USER_NAME / USER_PASSWORD (Settings tab) and set up passwordless sudo on every selected node.
+  - name: JohnTestApi
+    host: 10.0.1.11              # public/Elastic IP or DNS name, reachable from this machine
+    instance_id: i-0123456789abcdef0
+    labels: [emea]
+    exec: {mode: ssh}            # direct | ssh | ssh_sudo
+
+  - name: JaneTestGateway
+    host: i-0fedcba9876543210.example.com     # the instance id is found in the host, so no instance_id needed
+    exec: {mode: ssh_sudo}                    # this node needs `sudo kubectl`
+    urls:                                      # explicit links override a pattern with the same name
+      grafana: "https://grafana-{instance_id}.dev.example.com/"
+
+integrations:
+  # Import my instances: `airlock nodes import-aws` (read-only ec2:DescribeInstances, matched on USER_NAME).
+  aws:
+    regions: [us-east-1]
+    # profile: dev
+    # host_template: "{instance_id}.example.com"   # when nodes are reached by DNS name, not IP
+
+# --- Mode 2 (Gateway): shown in the PROD tab ---------------------------------------------------------------------
+# An environment is what a Gateway session can reach. Local kubectl contexts also appear in the PROD tab on their own;
+# an entry here adds tools, an execution mode and policy. Secrets are never in this file: `*_env` names a variable that
+# is read from ~/.airlock/secrets/<env>/*.env (mode 0600, mounted into the gateway container only) or the environment.
+# Tool `mode` is `read` (default) or `approve_writes` (mutating calls wait for you in the UI).
+environments:
+  - name: uat
+    kube_context: uat                    # `kubectl --context uat get ns` is the validity check (direct mode)
+    exec:                                # how kubectl-style tools run: direct | ssh | ssh_sudo
+      mode: ssh_sudo
+      host: uat-bastion.example.com
+      user: "${USER_NAME}"
+      auth: password                     # USER_PASSWORD, via SSH_ASKPASS, never on a command line
+      sudo_password: "${USER_PASSWORD}"  # sent on stdin to `sudo -S`
+      # host_key: "ssh-ed25519 AAAA..."  # pinned: the connection is refused if it differs
+    tools:
+      - postgres:   {dsn_env: PG_DSN, mode: read, schemas: [public], max_rows: 100}
+      - elastic:    {url_env: ES_URL, indices: ["events-*"]}
+      - redis:      {url_env: REDIS_URL, key_prefixes: ["session:"]}
+      - kubernetes: {mode: read, namespaces: [app, gateway]}     # secrets are always denied
+      - remote_ops: {hosts: [JohnTestApi], operations: [disk, journal-tail]}   # named operations only
+      # Predefined kubectl commands: the only extra kubectl the agent gets. Each is a fixed argv (no shell) with typed
+      # {{ name:type }} parameters, exposed as the MCP tool kubectl.<name>. The agent supplies values, never verbs or flags.
+      # exec needs allow_exec: true and a closed set (enum or regex) for every parameter; write verbs need risk: write
+      # and `mode: approve_writes` on this tool, and then each call waits for you in the UI.
+      - kubectl_commands:
+          mode: read
+          commands:
+            - name: db_roles
+              description: Which database pod is the primary and which are replicas
+              argv: [-n, postgres, get, pods, -L, cnpg.io/instanceRole]
+            - name: product_count
+              description: Number of active products of one category (read-only role, on a replica)
+              allow_exec: true
+              argv: [-n, postgres, exec, "{{ pod:enum(app-database-2,app-database-3) }}", -c, postgres, --, psql, -U, readonly, -d, app, -At,
+                     -c, "select count(*) from products where active and category = '{{ kind:enum(Book,Video) }}'"]
+      - airflow:    {url_env: AIRFLOW_URL}
+      - slack:      {channels: [alerts, incidents], deny_dm: true, token_env: SLACK_TOKEN}
+      - jira:       {url: "https://example.atlassian.net", projects: [OPS, DEV], user_env: JIRA_USER, token_env: JIRA_API_TOKEN}
+    approvals: {mutating: ask}
+
+# Query patterns: the only queries the agent can run. Raw queries must be an instance of one; placeholders are
+# `{{ name:type }}` with types int, float, str, enum(a,b), ts, list[int], list[str]. Manage them in the UI or `airlock patterns`.
+query_patterns:
+  - name: orders_by_status
+    kind: sql
+    description: Count orders per status created in the last N hours
+    scope: [uat]
+    template: >
+      select status, count(*) from orders
+      where created_at > now() - interval '{{ hours:int }} hours'
+      group by status
+    params: {hours: {min: 1, max: 168, default: 6}}
+    limits: {rows: 100, timeout_s: 10}
+
+  - name: events_for_order
+    kind: elasticsearch
+    description: Events for one order id in the last day
+    template:
+      index: "events-*"
+      body: {query: {bool: {filter: [{term: {order_id: "{{ order_id:str }}"}}, {range: {ts: {gte: "now-1d"}}}]}}, size: "{{ size:int }}"}
+    params: {size: {max: 200, default: 50}}
+
+  - name: session_hash
+    kind: redis
+    description: Read one session hash
+    template: "HGETALL session:{{ id:str }}"
+    params: {id: {regex: "^[A-Za-z0-9_-]{1,64}$"}}
+
+# operations also load from operations/*.yaml and ~/.airlock/operations/*.yaml (see SPEC.md 6.2).

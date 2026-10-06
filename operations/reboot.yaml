@@ -1,0 +1,4 @@
+name: reboot
+description: Reboot the node (destructive, needs confirmation)
+risk: destructive
+run: systemctl reboot
