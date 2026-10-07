@@ -30,7 +30,7 @@ button{{padding:.2rem .6rem}}.err{{color:#d33;position:sticky;top:0;z-index:9;ba
 <h2>Nodes</h2>
 <form id=bulk method=post action=/sessions class=add><b>Selected nodes:</b>
 <select name=cmd><option value=/sessions data-start=1>Start session on selected
-<option value=/nodes/aws/start data-confirm="Start the EC2 instances of the selected nodes?">AWS: start instances
+<option value=/nodes/aws/start>AWS: start instances
 <option value=/nodes/aws/stop data-confirm="STOP the EC2 instances of the selected nodes? They go offline until started again.">AWS: stop instances
 <option value=/nodes/aws/reboot data-confirm="Reboot the EC2 instances of the selected nodes?">AWS: reboot instances
 <option value=/nodes/bulk-delete data-confirm="Delete selected nodes from the config?">Delete from config</select>
