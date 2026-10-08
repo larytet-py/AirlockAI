@@ -212,7 +212,7 @@ def make_app(config_path=None) -> FastAPI:
                 links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}">ssh</a>')
             iid = n.resolved_instance_id()
             own = n.notes if n.notes and not n.notes.startswith("imported from AWS:") else ""   # drop the old auto-generated import note
-            note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, own) if x)
+            note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, n.created_by and f"created by {n.created_by}", own) if x)
             su = n.exec.user or ""
             su = (resolve_env_user(su) if "$" in su else su) or os.environ.get("USER_NAME", "")
             sshcmd = f"ssh {su}@{n.host}" if su else f"ssh {n.host}"

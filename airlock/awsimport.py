@@ -133,6 +133,9 @@ def to_spec(inst: Instance, cfg: Config, taken: set[str]) -> dict:
     from .config import node_spec
     spec = node_spec(node_name(inst, taken), host_for(inst, cfg), user="${USER_NAME}", mode="ssh")
     spec["instance_id"], spec["region"] = inst.id, inst.region
+    by = inst.tags.get("InitiatedBy") or inst.tags.get("CreatedBy")
+    if by:
+        spec["created_by"] = by
     return spec
 
 

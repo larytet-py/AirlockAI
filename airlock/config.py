@@ -75,6 +75,7 @@ class Node(Strict):
     region: str | None = None
     labels: list[str] = []
     notes: str = ""
+    created_by: str = ""   # EC2 InitiatedBy / CreatedBy tag, filled by the AWS import
     exec: Exec = Exec()
     local: bool = False
     urls: dict[str, str] = {}
