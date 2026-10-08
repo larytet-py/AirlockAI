@@ -71,7 +71,7 @@ async function ntick(){{try{{
     const row=document.querySelector(`tr[data-node="${{name}}"]`);if(!row)continue;
     const q=k=>row.querySelector(`[data-n=${{k}}]`);
     q('dot').className='chip '+(s.up?'up':'down');q('dot').textContent=s.up?'\u25cf up':(s.login_missing?'\u25cf down: login is missing':'\u25cf down');q('dot').title=s.error||'';
-    q('ip').innerHTML='<span class=lbl>IP</span> '+(s.ip?'ssh '+s.ip:'unresolved');q('ip').title=s.host+':'+s.port;
+    q('ip').innerHTML='<span class=lbl>IP</span> '+(s.ip||'unresolved');q('ip').title=s.host+':'+s.port;
     const ld=q('load'),dk=q('disk');dk.innerHTML='';
     if(!s.up){{ld.innerHTML='<span class=lbl>load</span> -';dk.innerHTML='<span class="chip lbl">storage -</span>';continue}}
     ld.innerHTML='<span class=lbl>load</span> '+(s.load1==null?'-':s.load1.toFixed(2)+(s.cores?' / '+s.cores+' cores':''));
