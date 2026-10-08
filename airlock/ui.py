@@ -42,7 +42,7 @@ button{{padding:.2rem .6rem}}.err{{color:#d33;position:sticky;top:0;z-index:9;ba
 <select name=mode><option>ssh<option>ssh_sudo<option>direct</select>
 <button>Add</button></form></details>
 <p>{aws_link}</p>
-<h2>Sessions</h2>
+<h2>AI Sessions</h2>
 <form id=sbulk method=post class=add><button formaction=/sessions/bulk-stop onclick="return confirm('Stop selected sessions?')">Stop selected</button>
 <button formaction=/sessions/bulk-delete onclick="return confirm('Delete selected sessions? Running ones are stopped first (this removes their key and sudo rule from the node).')">Delete selected</button>
 <button formaction=/sessions/bulk-discard onclick="return confirm('FORCE discard the selected sessions? Their containers and records are removed WITHOUT removing the ssh key and sudo rule from the nodes. Use only when a node cannot be reached; run airlock sweep later to clean up.')">Force discard</button>

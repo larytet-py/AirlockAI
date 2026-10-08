@@ -45,7 +45,7 @@ environment; credentials stay in the gateway container. Mutating tools are off u
 <label><input type=checkbox name=check value=1 checked> check first: <code>kubectl --context X get ns</code> (or the ssh variant)</label> <button>Add</button></form></details>
 <p><a href=/prod>Rescan local kubectl contexts</a></p>
 <h2>Approvals <small class=lbl>(mutating calls wait here)</small></h2><div id=appr>{approvals}</div>
-<h2>Sessions</h2>
+<h2>AI Sessions</h2>
 <form id=sbulk method=post class=add><button formaction=/prod/sessions/bulk-stop onclick="return confirm('Stop selected sessions?')">Stop selected</button>
 <button formaction=/prod/sessions/bulk-delete onclick="return confirm('Delete selected sessions? Running ones are stopped first.')">Delete selected</button>
 <button formaction=/prod/sessions/prune>Remove all stopped</button> <span id=stamp class=lbl></span></form>
