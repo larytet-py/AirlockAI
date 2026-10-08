@@ -17,7 +17,7 @@ from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import awsimport, nodestats, session, sources, sshaccess
-from .config import (ConfigError, add_node, claude_token_status, load_config, node_login_status, node_spec,
+from .config import (ConfigError, resolve_env_user, add_node, claude_token_status, load_config, node_login_status, node_spec,
                      parse_kv, parse_list, remove_claude_oauth_token, remove_node_login, save_claude_oauth_token, save_node_login)
 
 PAGE = """<!doctype html><meta charset=utf-8><title>AirlockAI - EC2</title>
@@ -211,6 +211,9 @@ def make_app(config_path=None) -> FastAPI:
                 user = n.exec.user if n.exec.user and "$" not in n.exec.user else ""
                 links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}">ssh</a>')
             note = f'<br><small style="color:#888">{e(n.notes)}</small>' if n.notes else ""
+            su = n.exec.user or ""
+            su = (resolve_env_user(su) if "$" in su else su) or os.environ.get("USER_NAME", "")
+            sshcmd = f"ssh {su}@{n.host}" if su else f"ssh {n.host}"
             chk = f'<input type=checkbox name=sel value="{e(n.name)}" form=bulk>'
             start = (f'<form method=post action=/sessions><input type=hidden name=nodes value="{e(n.name)}">'
                      f'<button onclick="return startingMsg(this)">Start</button></form>')
@@ -220,7 +223,7 @@ def make_app(config_path=None) -> FastAPI:
                     f'onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>')
             status = ('<div class=chips><span class="chip" data-n=dot>&hellip;</span><span class=chip data-n=ip><span class=lbl>IP</span> -</span>'
                       '<span class=chip data-n=load><span class=lbl>load</span> -</span><span class=chips data-n=disk></span></div>')
-            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small style="cursor:pointer" title="click to copy" onclick="cp(this)">ssh {e(n.host)}</small>{note}'
+            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small style="cursor:pointer" title="click to copy" onclick="cp(this)">{e(sshcmd)}</small>{note}'
                      f'<td>{status}<td>{" ".join(links)}<td>{start}<td>{mode}</tr>')
         srows = ""
         for s in session.list_sessions():
