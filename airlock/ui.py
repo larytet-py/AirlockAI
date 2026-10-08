@@ -56,6 +56,9 @@ function startingMsg(b){{const f=b.form||b.closest('form');
   setTimeout(()=>{{b.disabled=true;b.textContent='Starting\u2026 (15-30 s)'}},0);return true}}
 document.getElementById('nall').onchange=e=>document.querySelectorAll('input[name=sel]').forEach(c=>c.checked=e.target.checked);
 const gb=b=>b>=2**30?(b/2**30).toFixed(1)+' GB':(b/2**20).toFixed(0)+' MB';
+function cp(el){{const t=el.textContent,done=()=>{{el.textContent='copied';setTimeout(()=>el.textContent=t,800)}};
+  (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(t):Promise.reject()).then(done,()=>{{
+    const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}})}}
 function rn(el){{const w=el.closest('.nmwrap'),f=w.querySelector('form'),i=f.querySelector('input');
   el.hidden=true;f.hidden=false;i.focus();i.select()}}
 function rnCancel(i){{const w=i.closest('.nmwrap');i.value=i.dataset.orig;w.querySelector('form').hidden=true;w.querySelector('.nm').hidden=false}}
@@ -217,7 +220,7 @@ def make_app(config_path=None) -> FastAPI:
                     f'onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>')
             status = ('<div class=chips><span class="chip" data-n=dot>&hellip;</span><span class=chip data-n=ip><span class=lbl>IP</span> -</span>'
                       '<span class=chip data-n=load><span class=lbl>load</span> -</span><span class=chips data-n=disk></span></div>')
-            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small>ssh {e(n.host)}</small>{note}'
+            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small style="cursor:pointer" title="click to copy" onclick="cp(this)">ssh {e(n.host)}</small>{note}'
                      f'<td>{status}<td>{" ".join(links)}<td>{start}<td>{mode}</tr>')
         srows = ""
         for s in session.list_sessions():
