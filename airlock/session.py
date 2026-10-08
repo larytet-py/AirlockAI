@@ -215,7 +215,7 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
         pub = (d / "id_ed25519.pub").read_text()
         ips = {n.name: resolve_ip(n.ssh_exec().host) for n in nodes}
         st["ips"] = ips
-        st["sources"] = sources.mounts(sandbox=True)
+        st["sources"] = sources.mounts(sandbox=True, nodes=node_names)
         for n in nodes:
             acc = nodeaccess.enable_access(n, sid, pub, str(d / "id_ed25519"), ttl=ttl, audit=audit)
             if not acc.ready:
@@ -373,6 +373,7 @@ def rename_node_checked(config_path, old: str, new: str) -> Config:
     if transient:
         raise ConfigError(f"session(s) {', '.join(transient)} using {old} are starting or stopping: try again in a moment")
     cfg = rename_node(config_path, old, new)
+    sources.rename_node(old, new)
     try:
         for st in sessions:
             st["nodes"] = [new if n == old else n for n in st["nodes"]]
@@ -385,6 +386,7 @@ def rename_node_checked(config_path, old: str, new: str) -> Config:
             save_state(st)
     except Exception:
         rename_node(config_path, new, old)  # could not update the sessions: undo, never leave them pointing at nothing
+        sources.rename_node(new, old)
         raise
     for st in sessions:
         if st["status"] == "running" and st.get("ips"):
@@ -407,6 +409,8 @@ def remove_nodes_checked(config_path, names: list[str]) -> Config:
     busy = {n: sessions_using(n) for n in names if sessions_using(n)}
     free = [n for n in names if n not in busy]
     cfg = remove_nodes(config_path, free) if free else load_config(config_path)
+    for n in free:
+        sources.reset_node(n)
     if busy:
         detail = "; ".join(f"{n} (session {', '.join(s)})" for n, s in busy.items())
         raise ConfigError(f"deleted {len(free)}; not deleted (stop sessions first): {detail}")

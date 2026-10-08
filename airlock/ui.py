@@ -17,6 +17,7 @@ from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import awsimport, nodestats, session, sources, sshaccess
+from .audit import Audit
 from .config import (ConfigError, resolve_env_user, add_node, claude_token_status, load_config, node_login_status, node_spec,
                      parse_kv, parse_list, remove_claude_oauth_token, remove_node_login, save_claude_oauth_token, save_node_login)
 
@@ -213,6 +214,9 @@ def make_app(config_path=None) -> FastAPI:
             iid = n.resolved_instance_id()
             own = n.notes if n.notes and not n.notes.startswith("imported from AWS:") else ""   # drop the old auto-generated import note
             note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, n.created_by and f"created by {n.created_by}", own) if x)
+            srcs = ", ".join(x.mount_name for x in sources.load(n.name) if x.enabled) or "none"
+            note += (f'<br><small><a href="/nodes/{quote(n.name)}/sources" title="source folders mounted in AI sessions on this node">'
+                     f'src: {e(srcs)}</a>{"" if sources.is_custom(n.name) else " (default)"}</small>')
             su = n.exec.user or ""
             su = (resolve_env_user(su) if "$" in su else su) or os.environ.get("USER_NAME", "")
             sshcmd = f"ssh {su}@{n.host}" if su else f"ssh {n.host}"
@@ -257,13 +261,54 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
 <p class=lbl>Used by the controller only, once per session, to install the session's ssh key and a validated sudoers rule
 (<code>/etc/sudoers.d/90-airlock-&lt;session&gt;</code>) on test nodes, and removed again when the session ends. Prod nodes are refused unless
 allowed in the config. The agent never sees the password.</p><div id=login>{login_box}</div>
-<h2>Source code mounted into agents</h2>
-<p class=lbl>Each folder appears in the agent container as <code>/src/&lt;folder name&gt;</code>. Read-only by default; read-write applies to EC2 (sandbox)
+<h2>Source code mounted into agents (default)</h2>
+<p class=lbl>The default list: used by PROD sessions and by EC2 nodes without their own list (set one with the <i>src:</i> link under a node name).
+A session on several nodes mounts the folders of all of them. Each folder appears in the agent container as <code>/src/&lt;folder name&gt;</code>. Read-only by default; read-write applies to EC2 (sandbox)
 sessions only, PROD sessions always get read-only. Takes effect for sessions started after the change. Anything inside a mounted folder (a <code>.env</code> file, for example)
 is visible to the agent, and folders that overlap credential directories (<code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.kube</code>, ...) are refused.</p>
 <table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
 <form method=post action=/settings/sources class=add><input type=hidden name=action value=add><input name=path placeholder="~/myproject" size=36 required>
 <select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form></main>"""
+
+    def src_rows(node: str = "") -> str:
+        """Folder table rows (Settings tab: the default list; a node page: that node's list)."""
+        nd = f'<input type=hidden name=node value="{e(node)}">' if node else ""
+        rows = ""
+        for src in sources.load(node or None):
+            p = e(src.path)
+            miss = "" if src.exists else ' <span class=down>(folder not found, skipped)</span>'
+            rows += (f'<tr><td><code>{p}</code>{miss}<td>{"/src/" + e(src.mount_name) if src.exists else "-"}'
+                     f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=mode><input type=hidden name=path value="{p}">'
+                     f'<select name=mode onchange="this.form.submit()"><option value=ro {"selected" if src.mode == "ro" else ""}>read-only'
+                     f'<option value=rw {"selected" if src.mode == "rw" else ""}>read-write (EC2)</select></form>'
+                     f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=toggle><input type=hidden name=path value="{p}">'
+                     f'<input type=checkbox {"checked" if src.enabled else ""} onchange="this.form.submit()"></form>'
+                     f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=remove><input type=hidden name=path value="{p}">'
+                     f'<button>Remove</button></form></tr>')
+        return rows or '<tr><td colspan=5><span class=lbl>No folders: agents see only their /workspace.</span></tr>'
+
+    NODE_SRC = """<!doctype html><meta charset=utf-8><title>AirlockAI - {name} sources</title><style>{base_css}body{{font:14px system-ui;margin:0}}
+table{{border-collapse:collapse}}td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}
+.up{{color:#2a9d4a}}.down{{color:#d33}}.lbl{{color:#888}}.err{{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
+form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0 .25rem;border-radius:3px}}</style>
+{nav}<main><p class=err>{error}</p><p><a href=/>&larr; EC2 nodes</a></p><h2>Source code mounted for node {name}</h2>
+<p class=lbl>AI sessions on this node mount these folders as <code>/src/&lt;folder name&gt;</code> (a session on several nodes mounts the folders of all of them).
+{state} Takes effect for sessions started after the change.</p>
+<table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
+<form method=post action=/settings/sources class=add><input type=hidden name=node value="{name}"><input type=hidden name=action value=add><input name=path placeholder="~/myproject" size=36 required>
+<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{reset}</main>"""
+
+    @app.get("/nodes/{name}/sources", response_class=HTMLResponse)
+    def node_sources(name: str, error: str = ""):
+        if name not in {n.name for n in load_config(config_path).nodes}:
+            raise HTTPException(404)
+        custom = sources.is_custom(name)
+        state = ("This node has its own list." if custom else
+                 'This node uses the <a href=/settings>default list</a>; changing it here gives the node its own copy.')
+        reset = ('<p><form method=post action=/settings/sources><input type=hidden name=node value="' + e(name) + '">'
+                 '<input type=hidden name=action value=reset><button>Use the default list again</button></form></p>') if custom else ""
+        return NODE_SRC.format(base_css=BASE_CSS, nav=nav_html("ec2"), error=e(error), name=e(name), state=state,
+                               src_rows=src_rows(name), reset=reset)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(error: str = ""):
@@ -287,38 +332,34 @@ is visible to the agent, and folders that overlap credential directories (<code>
                          '<form method=post action=/auth/node-login class=add><input name=user autocomplete=username required size=20 placeholder="user name">'
                          '<input type=password name=password autocomplete=off required size=30 placeholder="password (also the sudo password)">'
                          '<button>Keep in memory</button></form>')
-        rows = ""
-        for src in sources.load():
-            p = e(src.path)
-            miss = "" if src.exists else ' <span class=down>(folder not found, skipped)</span>'
-            rows += (f'<tr><td><code>{p}</code>{miss}<td>{"/src/" + e(src.mount_name) if src.exists else "-"}'
-                     f'<td><form method=post action=/settings/sources><input type=hidden name=action value=mode><input type=hidden name=path value="{p}">'
-                     f'<select name=mode onchange="this.form.submit()"><option value=ro {"selected" if src.mode == "ro" else ""}>read-only'
-                     f'<option value=rw {"selected" if src.mode == "rw" else ""}>read-write (EC2)</select></form>'
-                     f'<td><form method=post action=/settings/sources><input type=hidden name=action value=toggle><input type=hidden name=path value="{p}">'
-                     f'<input type=checkbox {"checked" if src.enabled else ""} onchange="this.form.submit()"></form>'
-                     f'<td><form method=post action=/settings/sources><input type=hidden name=action value=remove><input type=hidden name=path value="{p}">'
-                     f'<button>Remove</button></form></tr>')
-        rows = rows or '<tr><td colspan=5><span class=lbl>No folders: agents see only their /workspace.</span></tr>'
+        rows = src_rows()
         return SETTINGS.format(base_css=BASE_CSS, nav=nav_html("settings"), error=e(error), auth_box=auth_box, login_box=login_box, src_rows=rows)
 
     @app.post("/settings/sources")
-    def settings_sources(action: str = Form(...), path: str = Form(""), mode: str = Form("ro")):
+    def settings_sources(action: str = Form(...), path: str = Form(""), mode: str = Form("ro"), node: str = Form("")):
+        """The default folder list, or with `node` that node's own list."""
+        nd = node or None
+        if nd and nd not in {n.name for n in load_config(config_path).nodes}:
+            raise HTTPException(404)
         def go():
             if action == "add":
-                sources.add(path, mode)
+                sources.add(path, mode, nd)
             elif action == "mode":
-                sources.update(path, mode=mode)
+                sources.update(path, mode=mode, node=nd)
             elif action == "toggle":
-                cur = next((x for x in sources.load() if x.path == path), None)
+                cur = next((x for x in sources.load(nd) if x.path == path), None)
                 if cur is None:
                     raise ConfigError(f"unknown source {path}")
-                sources.update(path, enabled=not cur.enabled)
+                sources.update(path, enabled=not cur.enabled, node=nd)
             elif action == "remove":
-                sources.remove(path)
+                sources.remove(path, nd)
+            elif action == "reset" and nd:
+                sources.reset_node(nd)
             else:
                 raise ConfigError("unknown action")
-        return back(go, "/settings")
+            Audit("settings").log("ui", "sources.change", node=nd or "default", action=action, path=path,
+                                  mode=mode if action in ("add", "mode") else None)
+        return back(go, f"/nodes/{quote(node)}/sources" if nd else "/settings")
 
     def back(fn, to: str = "/"):
         """Run an action, then return to the page; a refused action shows its reason instead of a stack trace."""

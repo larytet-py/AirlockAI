@@ -84,6 +84,8 @@ Open **Settings** in the UI.
    **Save token**. New sessions then start signed in.
 3. **Source code**: add the folders the agent should see, for example `~/myproject`. Each appears in the agent
    container as `/src/<folder name>`, read-only by default.
+   This is the default list. A node can have its own list: click **src:** under the node name on the EC2 tab.
+   A session mounts the folders of all its nodes.
 
 ### 7. Add your nodes
 
