@@ -22,7 +22,7 @@ from .patterns import Pattern, PatternError, Policy, validate
 
 SID = re.compile(r"^[a-f0-9]{6,32}$")
 
-CSS = """body{font:14px system-ui;margin:0}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #8884;padding:.4rem;text-align:left;vertical-align:top}
+CSS = """:root{color-scheme:light dark}body{font:14px system-ui;margin:0}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #8884;padding:.4rem;text-align:left;vertical-align:top}
 .up{color:#2a9d4a}.down{color:#d33}button{padding:.2rem .6rem}.err{color:#d33;position:sticky;top:0;z-index:9;background:Canvas;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}
 .err:empty{display:none}form{display:inline}.add input,.add select,.add textarea{margin:.2rem}.chips{display:flex;flex-wrap:wrap;gap:.15rem 1.2rem;align-items:center}.chip{white-space:nowrap}
 .lbl{color:#888}[hidden]{display:none!important}.nm{cursor:text;border-bottom:1px dotted #888}.nm:hover{background:#8882}.warn{border:1px solid #c2410c;border-radius:6px;padding:.5rem .8rem;background:#c2410c18}

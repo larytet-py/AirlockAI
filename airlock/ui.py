@@ -100,7 +100,7 @@ tick();setInterval(tick,5000);
 </script>"""
 
 
-BASE_CSS = """nav{position:sticky;top:0;align-self:flex-start;height:100vh;box-sizing:border-box;width:9rem;flex:none;padding:1rem .6rem;
+BASE_CSS = """:root{color-scheme:light dark}nav{position:sticky;top:0;align-self:flex-start;height:100vh;box-sizing:border-box;width:9rem;flex:none;padding:1rem .6rem;
 border-right:1px solid #8884;display:flex;flex-direction:column;gap:.4rem}.brand{font-weight:700;margin-bottom:.6rem}
 nav .tab{display:flex;justify-content:space-between;align-items:center;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;
 border:1px solid #8884;font-weight:600}nav .tab.on{background:#2a6df4;color:#fff;border-color:#2a6df4}nav .tab.prod.on{background:#c2410c;border-color:#c2410c}
@@ -349,7 +349,7 @@ is visible to the agent, and folders that overlap credential directories (<code>
                                                             mode=mode)))
 
     AWS_PAGE = """<!doctype html><meta charset=utf-8><title>Import from AWS</title>
-<style>body{{font:14px system-ui;margin:1rem 2rem}}table{{border-collapse:collapse;width:100%}}
+<style>:root{{color-scheme:light dark}}body{{font:14px system-ui;margin:1rem 2rem}}table{{border-collapse:collapse;width:100%}}
 td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:#d33;position:sticky;top:0;z-index:9;background:Canvas;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}</style>
 <h1>Import from AWS</h1><p><a href=/>&larr; back</a></p><p class=err>{error}</p>{hint}
 <p>Read-only <code>ec2 describe-instances</code>, instances with a tag value containing <b>{user}</b>. Nothing is written to AWS.</p>
