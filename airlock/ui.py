@@ -16,7 +16,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import awsimport, nodestats, session, sources, sshaccess
+from . import awsimport, nodeaccess, nodestats, session, sources, sshaccess
 from .audit import Audit
 from .config import (ConfigError, resolve_env_user, add_node, claude_token_status, load_config, node_login_status, node_spec,
                      parse_kv, parse_list, remove_claude_oauth_token, remove_node_login, save_claude_oauth_token, save_node_login)
@@ -379,7 +379,10 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
 
     @app.post("/auth/node-login")
     def login_save(user: str = Form(...), password: str = Form(...)):
-        return back(lambda: save_node_login(user, password), "/settings")
+        def go():
+            save_node_login(user, password)
+            nodeaccess.provision_async(load_config(config_path).nodes)   # own ssh key + passwordless sudo, if a ~/.ssh/*.pub exists
+        return back(go, "/settings")
 
     @app.post("/auth/node-login/remove")
     def login_remove():
@@ -388,8 +391,10 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
     @app.post("/nodes")
     def node_add(name: str = Form(...), host: str = Form(...), port: int = Form(22), user: str = Form(""),
                  mode: str = Form("ssh")):
-        return back(lambda: add_node(config_path, node_spec(name, host, port=port, user=user,
-                                                            mode=mode)))
+        def go():
+            add_node(config_path, node_spec(name, host, port=port, user=user, mode=mode))
+            nodeaccess.provision_async([n for n in load_config(config_path).nodes if n.name == name.strip()])
+        return back(go)
 
     AWS_PAGE = """<!doctype html><meta charset=utf-8><title>Import from AWS</title>
 <style>:root{{color-scheme:light dark}}body{{font:14px system-ui;margin:1rem 2rem}}table{{border-collapse:collapse;width:100%}}
@@ -431,10 +436,13 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
             wanted = {x.split("|")[0] for x in iid}
             found = [i for i in awsimport.new_instances(cfg, awsimport.find_instances(cfg)) if i.id in wanted]  # re-query: never trust the form
             taken = {n.name for n in cfg.nodes}
+            added = set()
             for i in found:
                 spec = awsimport.to_spec(i, cfg, taken)
                 taken.add(spec["name"])
+                added.add(spec["name"])
                 add_node(config_path, spec)
+            nodeaccess.provision_async([n for n in load_config(config_path).nodes if n.name in added])
         try:
             go()
             return RedirectResponse("/", status_code=303)

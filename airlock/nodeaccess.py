@@ -183,3 +183,85 @@ def stale_sessions(node: Node, live: set[str]) -> list[str]:
                 found.setdefault(name[11:], 0)  # no expiry recorded in the filename: stale once the session is gone
     now = time.time()
     return sorted(s for s, exp in found.items() if s not in live or (exp and exp < now))
+
+
+# --- Permanent personal access: the operator's own ~/.ssh/*.pub plus passwordless sudo, installed once per node. ---
+
+def local_pubkeys() -> list[str]:
+    """Public keys of the operator running this server (one per line, comments kept); empty when there are none."""
+    from pathlib import Path
+    out: list[str] = []
+    for f in sorted((Path.home() / ".ssh").glob("*.pub")):
+        try:
+            out += [ln.strip() for ln in f.read_text().splitlines() if ln.strip().startswith(("ssh-", "ecdsa-", "sk-"))]
+        except OSError:
+            pass
+    return out
+
+
+ADD_PERSONAL_KEYS = r"""set -e
+umask 077
+mkdir -p ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+while IFS= read -r k; do
+  [ -n "$k" ] && { grep -qxF "$k" ~/.ssh/authorized_keys || echo "$k" >> ~/.ssh/authorized_keys; }
+done
+"""
+
+# sudoers.d ignores names containing '.' or '~', so the file name is sanitised (the rule keeps the real user name).
+INSTALL_PERSONAL_SUDOERS = r"""set -e
+f=/etc/sudoers.d/$1
+t=$(mktemp)
+printf '%s\n' "$2" > "$t"
+visudo -cf "$t" >/dev/null
+install -m 0440 -o root -g root "$t" "$f"
+rm -f "$t"
+"""
+
+
+def install_personal_access(node: Node) -> str:
+    """Install the operator's public keys and a NOPASSWD sudoers drop-in for the node login. Returns a one-line result.
+
+    No-op (returns a reason) when there is no public key or no login; idempotent, so it is safe to repeat."""
+    keys = local_pubkeys()
+    if not keys:
+        return "skipped: no public key in ~/.ssh"
+    if login_missing():
+        return "skipped: no node login"
+    user = resolve("${USER_NAME}", "node login") or ""
+    if not USER_RE.match(user):
+        return f"refused: unsafe user name {user!r}"
+    _, method = _admin_exec(node)
+    r = _stdin_script(node, ADD_PERSONAL_KEYS, "\n".join(keys) + "\n")
+    if not r.ok:
+        return f"authorized_keys step failed: {r.err.strip()}"
+    fname = "zz_" + re.sub(r"[^A-Za-z0-9_-]", "_", user)
+    r = _sudo(node, method, ["sh", "-c", INSTALL_PERSONAL_SUDOERS, "sh", fname, f"{user} ALL=(ALL) NOPASSWD:ALL"])
+    if not r.ok:
+        return f"sudoers step failed: {r.err.strip()}"
+    return f"ok: {len(keys)} key(s) and passwordless sudo for {user}"
+
+
+def _stdin_script(node: Node, script: str, data: str, timeout: float = 60) -> runner.Result:
+    """Run a shell script whose stdin is `data` (the script itself travels as the remote command)."""
+    ex, _ = _admin_exec(node)
+    base, env = runner.ssh_base(ex)
+    return runner.execute(runner.Wrapped(base + ["--", shlex.join(["sh", "-c", script])], data.encode(), env), timeout=timeout)
+
+
+def provision_async(nodes: list[Node]) -> None:
+    """Best-effort background install on remote nodes (never blocks or fails the UI action); each result is audited."""
+    import threading
+    todo = [n for n in nodes if not n.local and n.host]
+    if not todo or login_missing() or not local_pubkeys():
+        return
+
+    def run() -> None:
+        for n in todo:
+            try:
+                msg = install_personal_access(n)
+            except Exception as e:   # one unreachable node must not stop the rest
+                msg = f"failed: {e}"
+            Audit("nodeaccess").log("ui", "personal_access", node=n.name, result=msg)
+    threading.Thread(target=run, daemon=True).start()
