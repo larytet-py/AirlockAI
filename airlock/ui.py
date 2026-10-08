@@ -210,7 +210,9 @@ def make_app(config_path=None) -> FastAPI:
             if "ssh" not in n.links:  # no ssh template configured: fall back to the node's own address
                 user = n.exec.user if n.exec.user and "$" not in n.exec.user else ""
                 links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}">ssh</a>')
-            note = f'<br><small style="color:#888">{e(n.notes)}</small>' if n.notes else ""
+            iid = n.resolved_instance_id()
+            own = n.notes if n.notes and not n.notes.startswith("imported from AWS:") else ""   # drop the old auto-generated import note
+            note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, own) if x)
             su = n.exec.user or ""
             su = (resolve_env_user(su) if "$" in su else su) or os.environ.get("USER_NAME", "")
             sshcmd = f"ssh {su}@{n.host}" if su else f"ssh {n.host}"
