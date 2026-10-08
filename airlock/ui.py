@@ -217,7 +217,7 @@ def make_app(config_path=None) -> FastAPI:
                     f'onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>')
             status = ('<div class=chips><span class="chip" data-n=dot>&hellip;</span><span class=chip data-n=ip><span class=lbl>IP</span> -</span>'
                       '<span class=chip data-n=load><span class=lbl>load</span> -</span><span class=chips data-n=disk></span></div>')
-            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small>{e(n.host)}</small>{note}'
+            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small>ssh {e(n.host)}</small>{note}'
                      f'<td>{status}<td>{" ".join(links)}<td>{start}<td>{mode}</tr>')
         srows = ""
         for s in session.list_sessions():
