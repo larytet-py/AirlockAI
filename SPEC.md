@@ -757,6 +757,30 @@ Threats and controls
 
 Audit: every gateway call is logged before execution (intent) and after (result); the log is append-only JSONL outside the agent's reach, hash-chained per session.
 
+Audit record format: `{ts, node, ec2, actor, kind, payload, prev, hash}`. `node` (node name) and `ec2` (EC2 instance id) come right after `ts` on every record that concerns a node; they are strings, or lists for an operation on several hosts, and are omitted when the event has no node. Old records without them still verify.
+
+### 11.1 Traceability of what leaves the agent (options, not yet decided)
+
+Goal: for every shell command and outbound request of an agent, a record in the audit chain with timestamp, node name, EC2 id and session. Today the audit covers the controller and the gateway; the egress proxy (HTTP CONNECT, host:port allowlist) prints to its container's stdout only. All options below keep the agent network internal-only with the proxy as its sole exit; `HTTPS_PROXY` / `ALL_PROXY` set in the agent are a convenience, the network is the enforcement. In every option the audit file is written by the controller only (the proxy reports events to it over an authenticated channel; `Audit` is a single-writer chain), never by anything the agent can reach.
+
+| # | Option | What is recorded | Pros | Cons |
+|---|---|---|---|---|
+| A | Log in the existing HTTP CONNECT proxy | Per connection: time, session, destination host:port mapped to node name and EC2 id (the allowlist is built from the nodes), bytes, allowed or denied | Smallest change; works for curl, the model API and ssh via `ProxyCommand nc -X connect`; hostnames visible for HTTPS (from CONNECT) | No URL path, headers or body; no DNS or UDP; tools that ignore the proxy env are simply blocked, not traced |
+| B | SOCKS5 proxy as the single exit (replaces or sits next to A) | Same as A, plus every TCP destination, with remote DNS resolution (`socks5h`) | One choke point for http, ssh (`nc -X 5`) and anything honouring `ALL_PROXY`; DNS lookups are logged too, no DNS leak | New listener to write and test (stdlib only, in the proxy image); UDP ASSOCIATE should stay unsupported; still no payload; clients without SOCKS support need a shim |
+| C | TLS-terminating proxy (mitmproxy or squid ssl-bump) | Full HTTP request line, headers, optionally bodies, per curl call | The only option that records "curl https://host/path"; can enforce path rules | Agent container must trust a private CA; pinned clients break; bodies carry secrets and need `redact()` before storage; a larger attack surface in the proxy; the model API stream is better left un-intercepted (exempt it) |
+| D | nftables `log` / conntrack events on the gateway | One line per new connection (src, dst, port), any protocol | Catches non-proxy traffic and denied attempts that never reach the proxy; no client cooperation | No names, only IPs; needs correlation by container IP to session, node and EC2 id; kernel log plumbing |
+| E | Shell command capture in the agent container: wrapper (`script`, bash `DEBUG` trap / `PROMPT_COMMAND`) | Each typed command with time and working directory | Simple; no kernel features | An agent that execs directly or edits its shell avoids it; a record of intent, not of what ran |
+| F | `execve` tracing outside the agent (auditd, eBPF: Tetragon or Falco) | Every process started in the container, with argv, parent and session | Cannot be bypassed from inside; includes children of scripts (`curl` called by a script) | Needs host privileges and a kernel that supports it; noisy, needs filtering; argv only, not what the command did |
+| G | Node-side logging on the EC2 nodes (sshd marker `airlock:<sid>:<expiry>`, auditd or sudo I/O logging) | What a session actually executed on the node, tied to the session by the key marker | Works even if the agent network is bypassed; ground truth on the node | Logs live on the node and must be collected; auditd rules to install and clean up; only covers nodes |
+
+Combinations worth considering
+- Minimum (low effort): A, plus D for denied non-proxy attempts. Answers "which node and EC2 instance did the agent talk to, and when".
+- Recommended: B (one exit, DNS included) plus F (every command, unbypassable). Answers "what ran and where it connected".
+- Full request visibility: add C for chosen hosts only (never the model API). Answers "which URL was requested".
+- G is independent and complements any of the above for node-side forensics.
+
+Constraints common to all options: the proxy cannot see commands run inside an ssh session (only that the connection happened), so command-level records for nodes come from F or G; recorded request data must pass through `redact()`; a record is written before the connection is allowed to proceed when the decision is an approval, after it otherwise.
+
 Known residual risks (to state in the README): bypass mode means anything inside the agent container is fair game; the model API sees whatever the agent sees; a malicious tool author (the user) is out of scope.
 
 ## 12. Deployment, sharing and reuse
@@ -860,7 +884,7 @@ Decided
 - `USER_NAME` / `USER_PASSWORD` are shared across all MCPs and nodes.
 
 Open
-- None at this time.
+- Traceability of outbound traffic and commands: which option or combination of section 11.1 to build first.
 
 ## 15. Naming
 
