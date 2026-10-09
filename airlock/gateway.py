@@ -253,25 +253,25 @@ class Gateway:
             if miss:
                 raise ToolError(f"missing argument(s): {', '.join(miss)}")
         except ToolError as e:
-            self.audit.log("gateway", "tool.rejected", tool=name, args=args, error=str(e))
+            self.audit.log("gateway", "tool.rejected", tool=name, args=args, error=str(e), **self._who(args))
             return {"ok": False, "error": str(e)}
-        self.audit.log("gateway", "tool.intent", tool=name, args=args, risk=tool.risk)
+        self.audit.log("gateway", "tool.intent", tool=name, args=args, risk=tool.risk, **self._who(args))
         self._ctx.meta = {}
         try:
             result = tool.fn(args)
             text = self._finish(result)
             self.audit.log("gateway", "tool.result", tool=name, ok=True, ms=int((time.time() - t0) * 1000), bytes=len(text),
-                           **getattr(self._ctx, "meta", {}))
+                           **self._who(args, getattr(self._ctx, "meta", {})), **getattr(self._ctx, "meta", {}))
             return {"ok": True, "result": text}
         except (ToolError, Mismatch, PatternError, kubetools.KubePolicyError, BackendError, ConfigError, ValueError) as e:
             msg = redact(str(e))
             self.audit.log("gateway", "tool.result", tool=name, ok=False, error=msg, ms=int((time.time() - t0) * 1000),
-                           **getattr(self._ctx, "meta", {}))
+                           **self._who(args, getattr(self._ctx, "meta", {})), **getattr(self._ctx, "meta", {}))
             return {"ok": False, "error": msg}
         except Exception as e:  # a bug or driver error: say little, log the type
             # the agent sees only the error class; the audit log (outside its reach) keeps a redacted, truncated message
             self.audit.log("gateway", "tool.result", tool=name, ok=False, error=f"{type(e).__name__}: {redact(str(e))[:200]}",
-                           **getattr(self._ctx, "meta", {}))
+                           **self._who(args, getattr(self._ctx, "meta", {})), **getattr(self._ctx, "meta", {}))
             return {"ok": False, "error": f"{name} failed ({type(e).__name__}); see the audit log"}
 
     def _limit(self) -> None:
@@ -290,6 +290,14 @@ class Gateway:
             text = text.encode()[:self.max_output].decode(errors="ignore") + f"\n[truncated at {self.max_output} bytes]"
         return text
 
+    def _who(self, args: dict, meta: dict | None = None) -> dict:
+        """node / ec2 audit fields for a call: the hosts it names (args or the run's meta), else the node whose address it used."""
+        names = list((meta or {}).get("hosts") or args.get("hosts") or [])
+        if not names and (meta or {}).get("host"):
+            names = [n.name for n in self.cfg.nodes if (n.exec.host or n.host) == meta["host"]]
+        nodes = [n for n in self.cfg.nodes if n.name in names]
+        return {"node": nodes, "ec2": None} if nodes else {}
+
     def _meta(self, **kw) -> None:
         self._ctx.meta = {**getattr(self._ctx, "meta", {}), **kw}
 
@@ -300,9 +308,9 @@ class Gateway:
         mode = self.env.approvals.get("mutating", "ask")
         if mode == "deny":
             raise ToolError(f"{tool} changes state and this environment denies mutating calls")
-        self.audit.log("gateway", "approval.requested", tool=tool, args=args, risk=risk)
+        self.audit.log("gateway", "approval.requested", tool=tool, args=args, risk=risk, **self._who(args))
         state = self.approvals.request(tool, args, risk)
-        self.audit.log("gateway", "approval." + state, tool=tool)
+        self.audit.log("gateway", "approval." + state, tool=tool, **self._who(args))
         if state != "approved":
             raise ToolError(f"{tool} was not approved ({state})")
 

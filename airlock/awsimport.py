@@ -186,5 +186,5 @@ def control(cfg: Config, nodes: list[Node], action: str) -> list[str]:
             ok, detail = False, str(ex)
         for n, iid in items:
             lines.append(f"{n.name}: {action} requested" if ok else f"{n.name}: {action} failed ({detail})")
-            audit.log("controller", "aws.control", node=n.name, instance=iid, region=region, action=action, ok=ok)
+            audit.log("controller", "aws.control", node=n, ec2=iid, region=region, action=action, ok=ok)
     return lines

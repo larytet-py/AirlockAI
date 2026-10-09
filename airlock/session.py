@@ -35,6 +35,17 @@ CLAUDE_CMD = ["bash", "-c",
               "claude", "--dangerously-skip-permissions"]
 
 
+def _audit_nodes(st: dict) -> dict:
+    """node / ec2 audit fields for a session's nodes, from the state snapshot (works after a node left the config)."""
+    nodes = []
+    for name in st.get("nodes", []):
+        try:
+            nodes.append(Node.model_validate(st.get("node_specs", {}).get(name) or {"name": name, "host": name}))
+        except Exception:
+            nodes.append(name)
+    return {"node": nodes} if nodes else {}
+
+
 def docker(*args: str, check: bool = True, input: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
     p = subprocess.run(["docker", *args], capture_output=True, text=True, input=input, env=env)
     if check and p.returncode:
@@ -208,7 +219,7 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
           # snapshot (references only, no secrets): lets stop revoke access even if the node vanished from the config
           "node_specs": {n.name: n.model_dump(mode="json", exclude_none=True) for n in nodes}}
     save_state(st)
-    audit.log("controller", "session.start", nodes=node_names)
+    audit.log("controller", "session.start", node=nodes, nodes=node_names)
     try:
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"airlock:{sid}", "-f", str(d / "id_ed25519")],
                        check=True)
@@ -251,11 +262,11 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
         finish_model_login(ag, d, token)
         st["ssh"] = sshaccess.provision(sid)
         st["status"] = "running"
-        audit.log("controller", "session.running", allow=allow, containers=st["containers"])
+        audit.log("controller", "session.running", **_audit_nodes(st), allow=allow, containers=st["containers"])
     except Exception as e:
         st["error"] = redact(str(e))
         save_state(st)
-        audit.log("controller", "session.error", error=st["error"])
+        audit.log("controller", "session.error", **_audit_nodes(st), error=st["error"])
         stop_session(cfg, sid)
         raise
     save_state(st)
@@ -297,7 +308,7 @@ def stop_session(cfg: Config, sid: str) -> dict:
     for f in d.glob("claude-credentials.json"):
         f.unlink()
     save_state(st)
-    audit.log("controller", "session." + st["status"], pending=pending)
+    audit.log("controller", "session." + st["status"], **_audit_nodes(st), pending=pending)
     sshaccess.write_config()
     return st
 
@@ -327,7 +338,7 @@ def discard_session(sid: str) -> list[dict]:
         docker("rm", "-f", c, check=False)
     for n in st.get("networks", []):
         docker("network", "rm", n, check=False)
-    Audit(sid).log("controller", "session.discarded", forced=True, node_access_may_remain=left)
+    Audit(sid).log("controller", "session.discarded", **_audit_nodes(st), forced=True, node_access_may_remain=left)
     shutil.rmtree(SESSIONS / sid)
     shutil.rmtree(st.get("workspace") or "", ignore_errors=True)
     sshaccess.write_config()

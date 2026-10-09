@@ -134,7 +134,7 @@ def enable_access(node: Node, sid: str, pubkey: str, identity: str, *, ttl: str 
     v = runner.execute(runner.Wrapped(runner.ssh_base(ex.model_copy(update={"auth": "key"}), identity=identity)[0]
                                       + ["--", "sudo -n true" if sudo_mode == "nopasswd" else "true"]), timeout=30)
     if audit:
-        audit.log("node-access", "enable", node=node.name, session=sid, marker=mk, sudo=sudo_mode, ok=v.ok)
+        audit.log("node-access", "enable", node=node, session=sid, marker=mk, sudo=sudo_mode, ok=v.ok)
     if not v.ok:
         return Access(node.name, False, f"verification with session key failed: {v.err.strip()}", expiry)
     return Access(node.name, True, "ready", expiry)
@@ -161,7 +161,7 @@ def revoke_access(node: Node, sid: str, audit: Audit | None = None) -> tuple[boo
     r2 = _sudo(node, method, ["rm", "-f", f"/etc/sudoers.d/90-airlock-{sid}"])
     ok = r1.ok and r2.ok
     if audit:
-        audit.log("node-access", "revoke", node=node.name, session=sid, ok=ok)
+        audit.log("node-access", "revoke", node=node, session=sid, ok=ok)
     return ok, "" if ok else (r1.err + r2.err).strip()
 
 
@@ -263,5 +263,5 @@ def provision_async(nodes: list[Node]) -> None:
                 msg = install_personal_access(n)
             except Exception as e:   # one unreachable node must not stop the rest
                 msg = f"failed: {e}"
-            Audit("nodeaccess").log("ui", "personal_access", node=n.name, result=msg)
+            Audit("nodeaccess").log("ui", "personal_access", node=n, result=msg)
     threading.Thread(target=run, daemon=True).start()
