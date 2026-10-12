@@ -72,11 +72,7 @@ def propose_for_env(store: PatternStore, names: list[str], env: str, *, by: str 
 
 
 def _route_in(store: PatternStore, cfg: Config, env_name: str, kind: str, name: str) -> A.Route | None:
-    key = f"{env_name}/{kind}/{name}"
-    r = store.route(key)
-    if r is None:
-        r = next((x for x in A.legacy_routes(environment(cfg, env_name)) if x.key == key), None)
-    return r
+    return store.route(f"{env_name}/{kind}/{name}")
 
 
 def decide(store: PatternStore, cfg: Config, pid: str, *, approve: list[str] = (), reject: list[str] = (), note: str = "",
@@ -115,7 +111,7 @@ def _approve_item(store: PatternStore, cfg: Config, env, kind: str, it, *, by: s
     if kind == "route":
         r = it.route.model_copy(update={"env": env.name, "source": "approved", "enabled": True, "status": "pending"})
         secrets = load_secrets(env.secrets_path())
-        r = A.activate(r, env, backends, secret=lambda n: secrets.get(n), ex=env.exec_for("postgres"))
+        r = A.activate(r, env, backends, secret=lambda n: secrets.get(n), ex=env.exec_for(None))
         store.put_route(r, by=by)
         return "active" if r.status == "active" else f"approved but inactive: {r.error}"
     if kind == "query":

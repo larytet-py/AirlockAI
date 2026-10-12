@@ -38,8 +38,8 @@ def env(tools, **kw) -> Environment:
 
 def test_contexts_only_direct_kube_tools():
     assert kubecreds.contexts(env([{"kubernetes": {}}, {"kubectl_commands": {"context": "other", "commands": []}}])) == ["uat", "other"]
-    assert kubecreds.contexts(env([{"postgres": {"dsn_env": "X"}}])) == ["uat"]     # exec routes may be approved mid-session
-    assert kubecreds.contexts(Environment.model_validate({"name": "e", "tools": [{"postgres": {"dsn_env": "X"}}]})) == []
+    assert kubecreds.contexts(env([{"slack": {}}])) == ["uat"]     # exec routes may be approved mid-session
+    assert kubecreds.contexts(Environment.model_validate({"name": "e", "tools": [{"slack": {}}]})) == []
     assert kubecreds.contexts(env([{"kubernetes": {}}], exec={"mode": "ssh", "host": "b"})) == []
 
 
@@ -71,7 +71,7 @@ def test_plugin_failure_and_no_token(tmp_path):
 
 
 def test_no_kubectl_no_file(tmp_path):
-    assert kubecreds.write(tmp_path, Environment.model_validate({"name": "e", "tools": [{"postgres": {"dsn_env": "X"}}]})) is None
+    assert kubecreds.write(tmp_path, Environment.model_validate({"name": "e", "tools": [{"slack": {}}]})) is None
     assert not (tmp_path / "kube").exists()
 
 
@@ -89,23 +89,6 @@ def test_network_avoids_host_routes(monkeypatch):
     monkeypatch.setattr(session, "docker", lambda *a, check=True: calls.append(a) or SimpleNamespace(returncode=0, stderr=""))
     session.network_create("air-x", internal=True)
     assert calls == [("network", "create", "--internal", "-o", "com.docker.network.driver.mtu=1280", "--subnet", "10.200.3.0/24", "air-x")]
-
-
-def via_env(**via):
-    return Environment.model_validate({"name": "e", "kube_context": "uat", "tools": [{"postgres": {
-        "via": {"target": "deploy/backend", "namespace": "app", "container": "backend", **via}}}]})
-
-
-def test_sql_via_config():
-    env = via_env()
-    assert env.sql_via().kubectl_args() == ["exec", "-i", "-n", "app", "deploy/backend", "-c", "backend", "--",
-                                            "python", "manage.py", "shell", "-v", "0"]
-    assert kubecreds.contexts(env) == ["uat"]   # the gateway gets a token for the exec
-    for bad in ({"target": "deploy/x; rm"}, {"namespace": "Bad_NS"}, {"runner": "rails"}):
-        with pytest.raises(Exception):
-            via_env(**bad)
-    with pytest.raises(Exception, match="either dsn_env or via"):
-        Environment.model_validate({"name": "e", "tools": [{"postgres": {"dsn_env": "X", "via": {"target": "web", "namespace": "a"}}}]})
 
 
 def test_sql_exec_sends_data_not_code(monkeypatch):
@@ -138,21 +121,3 @@ def test_sql_exec_sends_data_not_code(monkeypatch):
 def test_sql_exec_program_compiles():
     from airlock.backends import SQL_EXEC_PROGRAM
     compile(SQL_EXEC_PROGRAM.replace("PAYLOAD", "e30="), "airlock-sql", "exec")
-
-
-def test_check_sql_via_names_the_missing_workload(monkeypatch):
-    from airlock import envs, runner
-    seen = []
-
-    def fake(w, timeout=60):
-        seen.append(w.cmd)
-        if "deploy/gone" in w.cmd:
-            return runner.Result(1, "", 'Error from server (NotFound): deployments.apps "gone" not found')
-        return runner.Result(0, "backend sidecar", "")
-
-    monkeypatch.setattr(runner, "execute", fake)
-    assert envs.check_sql_via(via_env()) is None
-    assert seen[0][:6] == ["kubectl", "--context", "uat", "get", "-n", "app"]
-    assert "not found" in envs.check_sql_via(via_env(target="deploy/gone"))
-    assert "no container web" in envs.check_sql_via(via_env(container="web"))
-    assert envs.check_sql_via(env([{"kubernetes": {}}])) is None

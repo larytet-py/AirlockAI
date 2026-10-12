@@ -159,8 +159,9 @@ uv run airlock approvals list                           # mutating calls waiting
 uv run airlock test --env uat                           # policy self-checks: forbidden calls must be refused
 ```
 
-Existing `tools:` entries (`postgres: {dsn_env}`, `elastic: {url_env}`, `redis: {url_env}`, `postgres: {via}`) keep
-working and show up as routes "from config". YAML import and export of patterns are in Settings › Access.
+Data stores are never configured in `airlock.yaml`: a `postgres`, `elastic` or `redis` entry under `tools:` (and `via`)
+is refused with a message to remove it. Access is an approved route in `~/.airlock/airlock.db`; prefer `exec` routes,
+which use the pod's own credentials and need no password. YAML import and export of patterns are in Settings › Access.
 
 ssh into an agent container (rebuild the images once): `airlock ssh setup`, then `ssh <session id or name>` (user `agent`). Name a session by clicking its id in the UI or with `airlock session name ID NAME`.
 

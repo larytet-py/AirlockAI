@@ -59,12 +59,8 @@ environments:
       sudo_password: "${USER_PASSWORD}"  # sent on stdin to `sudo -S`
       # host_key: "ssh-ed25519 AAAA..."  # pinned: the connection is refused if it differs
     tools:
-      - postgres:   {dsn_env: PG_DSN, mode: read, schemas: [public], max_rows: 100}
-      # Or, with no DSN in airlock: approved SQL runs with the application's own database connection, in its pod
-      # (`kubectl exec -i -n app deploy/web -c web -- python manage.py shell`), READ ONLY and rolled back:
-      # - postgres: {via: {runner: django, target: deploy/web, namespace: app, container: web}, mode: read, max_rows: 100}
-      - elastic:    {url_env: ES_URL, indices: ["events-*"]}
-      - redis:      {url_env: REDIS_URL, key_prefixes: ["session:"]}
+      # Data stores (Postgres, Elasticsearch, Redis, files) are not configured here: the agent proposes an access route
+      # (proposal.submit), you approve it in the PROD tab, and it is kept in ~/.airlock/airlock.db (Settings > Access).
       - kubernetes: {mode: read, namespaces: [app, gateway]}     # secrets are always denied
       - remote_ops: {hosts: [JohnTestApi], operations: [disk, journal-tail]}   # named operations only
       # Predefined kubectl commands: the only extra kubectl the agent gets. Each is a fixed argv (no shell) with typed

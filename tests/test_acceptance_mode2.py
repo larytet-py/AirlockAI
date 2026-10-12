@@ -35,7 +35,6 @@ def sess(tmp_path_factory):
           - name: uat
             kube_context: uat-ctx
             tools:
-              - postgres: {dsn_env: PG_DSN, mode: read, schemas: [public]}
               - kubernetes: {mode: read, namespaces: [app]}
     """))
     sd = HOME / "secrets" / "uat"
@@ -43,6 +42,8 @@ def sess(tmp_path_factory):
     f = sd / "secrets.env"
     f.write_text(f"PG_DSN=postgres://app:{CANARY}@db.invalid:5432/orders\n")
     f.chmod(0o600)
+    from airlock.access import Route
+    PatternStore().put_route(Route(env="uat", kind="postgres", transport="direct", secret="PG_DSN", schemas=["public"]), by="test")
     PatternStore().upsert(Pattern(name="orders_by_status", kind="sql", scope=["uat"], description="Orders per status",
                                   template="select status, count(*) from orders where created_at > now() - interval '{{ hours:int }} hours' group by status",
                                   params={"hours": {"min": 1, "max": 168, "default": 6}}))

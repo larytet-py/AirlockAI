@@ -31,14 +31,9 @@ def contexts(env: Environment) -> list[str | None]:
             c = env.context(env.tool(t))
             if c not in out:
                 out.append(c)
-    via = env.sql_via()   # approved SQL run with `kubectl exec` in an application pod
-    if via and env.exec_for("postgres").mode == "direct":
-        c = via.context or env.kube_context
-        if c not in out:
-            out.append(c)
     # the environment's own context: the gateway checks proposed exec routes (`kubectl get`) and runs approved ones,
     # and either can happen in a session that started with no Kubernetes tool (SPEC 7.8)
-    if env.kube_context and env.exec_for("postgres").mode == "direct" and env.kube_context not in out:
+    if env.kube_context and env.exec_for(None).mode == "direct" and env.kube_context not in out:
         out.append(env.kube_context)
     return out
 

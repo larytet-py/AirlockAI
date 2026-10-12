@@ -2,8 +2,7 @@
 
 A route belongs to one environment and one store kind. `direct`: the gateway connects with a secret it holds.
 `exec`: the gateway runs a built-in runner in an application pod (`kubectl exec -i`), with the pod's own credentials.
-Routes come from two places: the approval flow (stored with the patterns, live through the snapshot) and the legacy
-`tools:` entries of the config file (`dsn_env`, `url_env`, `via`), which load as approved routes with source "config".
+Routes come only from the approval flow: stored with the patterns, live in the gateway through the snapshot.
 
 Before a human approves, a proposal is only validated and Kubernetes metadata is read (`check_target`): no connection
 to a store, no exec. After approval the controller runs `activate` once per new route, which probes it read-only and
@@ -24,7 +23,6 @@ from .patterns import KINDS as PATTERN_KINDS, Limits, Pattern, PatternError, Pol
 ROUTE_KINDS = ("postgres", "elasticsearch", "redis", "files")
 PATTERN_KIND = {"postgres": "sql", "elasticsearch": "elasticsearch", "redis": "redis"}   # files: no patterns, the roots are the policy
 ROUTE_KIND = {v: k for k, v in PATTERN_KIND.items()}
-LEGACY_TOOL = {"postgres": "postgres", "elasticsearch": "elastic", "redis": "redis"}
 # (kind, runner) pairs built in so far; the agent picks from these only. Every one uses the pod's own credentials:
 # django and airflow: the application's database connection; python: the pod's mounted files, or (redis, elasticsearch)
 # the pod's environment variables named by `url_var` etc., whose values never leave the pod.
@@ -85,7 +83,7 @@ class Route(Strict):
     status: Literal["pending", "active", "inactive"] = "active"
     guarantees: dict[str, Any] = {}
     error: str | None = None
-    source: Literal["approved", "config"] = "approved"
+    source: Literal["approved"] = "approved"
 
     @field_validator("name")
     @classmethod
@@ -171,31 +169,6 @@ class Route(Strict):
         cmd = {"python": PYTHON_STDIN, "airflow": AIRFLOW_STDIN}.get(self.runner, DJANGO_SHELL)
         return ["exec", "-i", "-n", t.namespace, t.workload] + (["-c", t.container] if t.container else []) + ["--", *cmd]
 
-
-def legacy_routes(env) -> list[Route]:
-    """The data-store entries of the environment's `tools:` as approved routes (source "config")."""
-    out = []
-    pg = env.tool("postgres")
-    if pg is not None:
-        common = {"schemas": pg.get("schemas"), "require_replica": bool(pg.get("require_replica")), "max_rows": pg.get("max_rows")}
-        via = env.sql_via()
-        if via is not None:
-            out.append(Route(env=env.name, kind="postgres", transport="exec", runner=via.runner, context=via.context, source="config",
-                             target=ExecTarget(namespace=via.namespace, workload=via.target, container=via.container), **common))
-        elif pg.get("dsn_env"):
-            out.append(Route(env=env.name, kind="postgres", transport="direct", secret=pg["dsn_env"], source="config", **common))
-    es = env.tool("elastic")
-    if es is not None and es.get("url_env"):
-        out.append(Route(env=env.name, kind="elasticsearch", transport="direct", secret=es["url_env"], indices=es.get("indices"),
-                         user_secret=es.get("user_env"), password_secret=es.get("password_env"), source="config"))
-    rd = env.tool("redis")
-    if rd is not None and rd.get("url_env"):
-        out.append(Route(env=env.name, kind="redis", transport="direct", secret=rd["url_env"], key_prefixes=rd.get("key_prefixes"),
-                         source="config"))
-    return out
-
-
-# ---------------------------------------------------------------- proposals
 
 class RouteItem(Strict):
     route: Route
@@ -297,7 +270,7 @@ def check_static(p: Proposal, known: dict[str, Route], *, have_secret: Callable[
         try:
             if kind == "route":
                 r = it.route
-                if r.key in known and known[r.key].source == "approved":
+                if r.key in known:
                     raise ValueError(f"route {r.kind}/{r.name} is already approved in {r.env}")
                 if r.transport == "exec":
                     if (r.kind, r.runner) not in RUNNERS:

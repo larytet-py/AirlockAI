@@ -26,11 +26,8 @@ def cmd_validate(a, cfg) -> int:
     for raw in cfg.query_patterns:
         p = patterns.Pattern.model_validate(raw)
         for env in [x for x in ev if p.in_scope(x.name)] or [None]:
-            pol = patterns.Policy() if env is None else patterns.Policy(
-                schemas=(env.tool("postgres") or {}).get("schemas"), indices=(env.tool("elastic") or {}).get("indices"),
-                key_prefixes=(env.tool("redis") or {}).get("key_prefixes"))
             try:
-                patterns.validate(p, pol)
+                patterns.validate(p, patterns.Policy())   # route allowlists apply when the pattern is approved and run
             except patterns.PatternError as e:
                 print(f"query pattern {p.name}: {e}", file=sys.stderr)
                 return 1
@@ -271,7 +268,7 @@ def cmd_envs(a, cfg) -> int:
             tools[name] = envs.parse_tool_settings(rest)
         spec = envs.env_spec(a.args[0], context=a.context, mode=a.exec_mode, host=a.host, user=a.user, tools=tools)
         env = envs.Environment.model_validate(spec)
-        if not a.no_check and ("kubernetes" in env.tool_names() or env.sql_via()):
+        if not a.no_check and "kubernetes" in env.tool_names():
             err = envs.check_cluster(env)
             if err:
                 raise ConfigError(f"check failed: {err} (use --no-check to save anyway)")

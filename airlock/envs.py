@@ -11,10 +11,9 @@ from pydantic import field_validator, model_validator
 
 from .config import HOME, Config, ConfigError, Exec, Strict, NAME_RE
 
+# Data stores are not tools: they are approved access routes (SPEC 7.8, Settings > Access), never config entries
+STORE_TOOLS = {"postgres", "elastic", "redis"}
 TOOLS = {  # tool server -> allowed config keys
-    "postgres": {"dsn_env", "mode", "schemas", "max_rows", "require_replica", "via", "exec"},   # via: run in an app pod
-    "elastic": {"url_env", "mode", "indices", "user_env", "password_env"},
-    "redis": {"url_env", "mode", "key_prefixes"},
     "kubernetes": {"context", "mode", "namespaces", "exec"},
     "kubectl_commands": {"commands", "context", "mode", "exec"},   # predefined kubectl commands, SPEC 7
     "remote_ops": {"hosts", "operations", "mode"},
@@ -27,34 +26,6 @@ TOOLS = {  # tool server -> allowed config keys
 
 
 K8S_NAME = r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?"
-
-
-class SqlVia(Strict):
-    """postgres `via`: run approved SQL with the application's own database connection, by
-    `kubectl exec -i -n NAMESPACE TARGET [-c CONTAINER] -- COMMAND` (default: the Django shell). No DSN in airlock."""
-    runner: Literal["django"] = "django"   # what runs the query in the pod: the Django shell (the app's own DB connection)
-    target: str                     # deploy/backend, statefulset/x or a pod name
-    namespace: str
-    container: str | None = None
-    command: list[str] = ["python", "manage.py", "shell", "-v", "0"]
-    context: str | None = None      # default: the environment's kube_context
-
-    @field_validator("target")
-    @classmethod
-    def _target(cls, v):
-        if not re.fullmatch(rf"((deploy|deployment|statefulset|sts|pod)/)?{K8S_NAME}", v):
-            raise ValueError(f"via.target {v!r} must be deploy/NAME, statefulset/NAME or a pod name")
-        return v
-
-    @field_validator("namespace", "container")
-    @classmethod
-    def _name(cls, v):
-        if v is not None and not re.fullmatch(K8S_NAME, v):
-            raise ValueError(f"bad kubernetes name {v!r}")
-        return v
-
-    def kubectl_args(self) -> list[str]:
-        return ["exec", "-i", "-n", self.namespace, self.target] + (["-c", self.container] if self.container else []) + ["--", *self.command]
 
 
 class Environment(Strict):
@@ -91,15 +62,14 @@ class Environment(Strict):
             if len(it) != 1:
                 raise ValueError("each tools entry is one {tool: {settings}} mapping")
             (name, cfg), = it.items()
+            if name in STORE_TOOLS:
+                raise ValueError(f"tool {name}: data stores are no longer configured here; remove this entry and let the agent "
+                                 "propose a route (proposal.submit), approved in the PROD tab")
             if name not in TOOLS:
                 raise ValueError(f"unknown tool {name!r}; known: {', '.join(sorted(TOOLS))}")
             bad = set(cfg or {}) - TOOLS[name]
             if bad:
                 raise ValueError(f"tool {name}: unknown setting(s) {', '.join(sorted(bad))}")
-            if name == "postgres" and (cfg or {}).get("via") is not None:
-                SqlVia.model_validate(cfg["via"])
-                if cfg.get("dsn_env"):
-                    raise ValueError("tool postgres: set either dsn_env or via, not both")
             if name == "kubectl_commands":
                 from . import kubecommands
                 kubecommands.parse(cfg or {})   # raises ConfigError with the command name; surfaced by environments()
@@ -123,10 +93,6 @@ class Environment(Strict):
         if t and t.get("exec"):
             return Exec.model_validate({**(self.exec.model_dump(exclude_none=True) if self.exec else {}), **t["exec"]})
         return self.exec or Exec(mode="direct")
-
-    def sql_via(self) -> SqlVia | None:
-        v = (self.tool("postgres") or {}).get("via")
-        return SqlVia.model_validate(v) if v is not None else None
 
     def secrets_path(self) -> Path:
         return Path(os.path.expanduser(self.secrets_dir)) if self.secrets_dir else HOME / "secrets" / self.name
@@ -173,10 +139,11 @@ def load_secrets(directory: Path) -> dict[str, str]:
     return out
 
 
-def secret_status(env: Environment) -> dict[str, str]:
-    """Which `*_env` references of the tools are present (never the values): {VAR: present|missing}."""
+def secret_status(env: Environment, also: list[str] = ()) -> dict[str, str]:
+    """Which `*_env` references of the tools, and `also` (the secret names of approved direct routes), are present
+    (never the values): {VAR: present|missing}."""
     have = {**load_secrets(env.secrets_path()), **os.environ}
-    status: dict[str, str] = {}
+    status: dict[str, str] = {v: "present" if v in have else "missing" for v in also}
     for it in env.tools:
         for tool, cfg in it.items():
             for k, v in (cfg or {}).items():
@@ -380,30 +347,6 @@ def check_cluster(env: Environment, timeout: float = 20) -> str | None:
         return str(e)
     if not r.ok:
         return (r.err.strip().splitlines() or ["kubectl failed"])[-1][:300]
-    return check_sql_via(env, timeout)
-
-
-def check_sql_via(env: Environment, timeout: float = 20) -> str | None:
-    """The workload a postgres `via` points at must exist in this cluster, with that container: it is configuration
-    about one application, and another cluster may not run it. Returns an error text or None."""
-    from . import runner
-    via = env.sql_via()
-    if via is None:
-        return None
-    target = via.target if "/" in via.target else f"pod/{via.target}"
-    path = "{.spec.containers[*].name}" if target.startswith("pod/") else "{.spec.template.spec.containers[*].name}"
-    ex = env.exec_for("postgres")
-    try:
-        argv = runner.kubectl_argv(ex, ["get", "-n", via.namespace, target, "-o", f"jsonpath={path}"], via.context or env.kube_context)
-        r = runner.execute(runner.wrap(ex, argv), timeout=timeout)
-    except (ConfigError, ValueError) as e:
-        return str(e)
-    where = f"postgres via: {target} in namespace {via.namespace}"
-    if not r.ok:
-        err = (r.err.strip().splitlines() or ["kubectl failed"])[-1][:200]
-        return f"{where} not found ({err}); point via at an application pod this cluster runs, or use dsn_env"
-    if via.container and via.container not in r.out.split():
-        return f"{where} has no container {via.container} (containers: {r.out.strip() or 'none'})"
     return None
 
 

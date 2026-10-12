@@ -78,6 +78,16 @@ async function ptick(){{try{{const w=document.getElementById('pwrap');if(busy(w)
 setInterval(ptick,5000);
 </script>"""
 
+def route_secrets(env_name: str) -> list[str]:
+    """Secret names the approved direct routes of an environment read (SPEC 7.8); exec routes need none."""
+    from .patternstore import PatternStore
+    try:
+        rs = PatternStore().routes(env_name)
+    except Exception:   # no store yet
+        return []
+    return sorted({n for r in rs for n in (r.secret, r.user_secret, r.password_secret) if n})
+
+
 def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells) -> None:
     from .ui_access import make_access
     e = html.escape
@@ -109,7 +119,7 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
             n = e(env.name)
             ex = env.exec_for("kubernetes")
             tools = " ".join(f'<span class=tag title="mode">{e(t)}:{e((env.tool(t) or {}).get("mode", "read"))}</span>' for t in env.tool_names()) or '<span class=lbl>none</span>'
-            sec = E.secret_status(env)
+            sec = E.secret_status(env, route_secrets(env.name))
             miss = [v for v, s in sec.items() if s == "missing"]
             secbit = (f'<br><small class=down>missing secrets: {e(", ".join(miss))}</small>' if miss else
                       (f'<br><small class=lbl>secrets present ({len(sec)})</small>' if sec else ""))
@@ -144,7 +154,7 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
             rows += (f'<div><label><input type=checkbox name="on_{t}" value=1 {"checked" if on else ""}> {t}</label> '
                      f'<select name="mode_{t}"><option {"selected" if mode == "read" else ""}>read<option {"selected" if mode == "approve_writes" else ""}>approve_writes</select> '
                      f'<input name="cfg_{t}" value="{e(rest)}" placeholder="k=v,k=v" size=40></div>')
-        sec = E.secret_status(env)
+        sec = E.secret_status(env, route_secrets(env.name))
         secrow = ""
         if sec:
             secrow = ("<div>Secrets: " + ", ".join(f"<code>{e(v)}</code> {'<span class=up>present</span>' if s == 'present' else '<span class=down>missing</span>'}"
@@ -173,8 +183,6 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
                     kube = f'<br><small class="{"down" if exp and exp < time.time() + 3600 else "lbl"}">k8s token {left}</small> '
                 kube += (f'<form method=post action="/prod/sessions/{sid}/kube-refresh">'
                          f'<button title="get a new token on this machine (may open the browser to sign in)">refresh</button></form>')
-            if s.get("sql_error") and s["status"] == "running":
-                kube += f'<br><small class=down>sql: {e(s["sql_error"])}</small>'
             out += (f'<tr data-sid="{sid}" data-life="{e(s["status"])}"><td><input type=checkbox name=ssel value="{sid}" form=sbulk><td>{idcell}<td>{e(s["status"])}{err}'
                     f'<td data-f=container>&hellip;<td>{links}{sshcmd}<td data-f=cpu>-<td data-f=mem>-<td data-f=workspace>-<td>{e(s.get("environment", ""))}'
                     f'<td>{e(", ".join(s.get("tools", [])))}{kube}<td><a href=/audit/{sid} target=_blank>log</a></tr>')
@@ -231,7 +239,7 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
                 mode = str(form.get(f"mode_{t}", "read"))
                 if mode not in ("read", "approve_writes"):
                     raise ConfigError("mode is read or approve_writes")
-                if t in ("postgres", "elastic", "redis", "kubernetes", "kubectl_commands", "remote_ops", "airflow", "disk", "django"):
+                if t in ("kubernetes", "kubectl_commands", "remote_ops", "airflow", "disk", "django"):
                     cfg["mode"] = mode
                 out[t] = cfg
         return out
@@ -245,7 +253,7 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
                               host=str(form.get("host", "")), user=str(form.get("user", "")), tools=tools_from_form(form) or {"kubernetes": {"mode": "read"}},
                               )
             env = E.Environment.model_validate(spec)
-            if form.get("check") and ("kubernetes" in env.tool_names() or env.sql_via()):
+            if form.get("check") and "kubernetes" in env.tool_names():
                 err = E.check_cluster(env)
                 if err:
                     raise ConfigError(f"check failed, nothing saved ({err}). Untick the check to save anyway.")

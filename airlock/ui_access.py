@@ -106,8 +106,7 @@ def route_text(r: A.Route) -> str:
         meas.append("<span class=no>superuser</span>")
     if g.get("writable_mount"):
         meas.append("<span class=no>mount is writable; the runner only reads</span>")
-    src = ' <span class=tag>from config</span>' if r.source == "config" else ""
-    return f'{body}{state}{src}' + (f' <small class=lbl>({", ".join(meas)})</small>' if meas else "")
+    return f'{body}{state}' + (f' <small class=lbl>({", ".join(meas)})</small>' if meas else "")
 
 
 def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dict:
@@ -121,11 +120,7 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
         usage.update(st)
 
     def all_routes(cfg, st: PatternStore) -> dict[str, A.Route]:
-        out = {}
-        for env in E.environments(cfg):
-            out.update({r.key: r for r in A.legacy_routes(env)})
-        out.update({r.key: r for r in st.routes()})
-        return out
+        return {r.key: r for r in st.routes()}
 
     def envs_of(p: Pattern, cfg) -> list[str]:
         names = [x.name for x in E.environments(cfg)]
@@ -438,7 +433,7 @@ placeholder="query_patterns:\\n  - name: ..."></textarea><br><button>Import</but
                 last_t = transport
             if p is None:
                 r = routes.get(k)
-                box = (f'<input type=checkbox name=route value="{e(k)}" form=abulk>' if r and r.source == "approved" else "")
+                box = (f'<input type=checkbox name=route value="{e(k)}" form=abulk>' if r else "")
                 desc = route_text(r) + ("" if r.enabled else ' <span class=lbl>disabled</span>') if r else '<span class=no>route not approved</span>'
                 us = stats.get(f"route:{k}")
                 use = (f' <small class=lbl>&middot; {us["calls"]} call(s), last {fmt_ts(us["last_used"])}, {us["errors"]} error(s)</small>'

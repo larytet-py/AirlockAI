@@ -17,7 +17,7 @@ from pathlib import Path
 from . import kubecreds, runner, sources, sshaccess
 from .audit import Audit
 from .config import HOME, Config, ConfigError, MissingSecret, redact
-from .envs import Environment, check_sql_via, environment, load_secrets
+from .envs import Environment, environment, load_secrets
 from .gateway import decide_approval, list_approvals
 from .gwserver import token_hash
 from .patternstore import PatternStore
@@ -145,9 +145,6 @@ def start_gateway_session(cfg: Config, config_path, env_name: str, *, model_logi
                 st["kube_error"] = redact(str(e))
                 audit.log("controller", "kube.token_error", error=st["kube_error"])
             args += kubecreds.docker_args(d)
-            if kube and (verr := check_sql_via(env)):   # SQL via an app pod: that pod must exist in this cluster
-                st["sql_error"] = redact(verr)
-                audit.log("controller", "sql_via.check_failed", error=st["sql_error"])
         for var in ("USER_NAME", "USER_PASSWORD"):  # by name: values never on a command line, and never to the agent
             if os.environ.get(var):
                 args += ["-e", var]

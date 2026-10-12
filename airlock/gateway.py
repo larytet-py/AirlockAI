@@ -195,10 +195,8 @@ class Gateway:
 
     # ------------------------------------------------------------------ routes (SPEC 7.8)
     def routes(self) -> dict[str, A.Route]:
-        """Routes of this environment: the config's `tools:` entries, then approved ones (an approved route wins)."""
-        out = {r.key: r for r in A.legacy_routes(self.env)}
-        out.update({r.key: r for r in self.reader.routes(self.env.name)})
-        return out
+        """The approved routes of this environment (SPEC 7.8)."""
+        return {r.key: r for r in self.reader.routes(self.env.name)}
 
     def route_for(self, kind: str, name: str | None) -> A.Route:
         """kind: a pattern kind (sql, elasticsearch, redis)."""
@@ -218,10 +216,7 @@ class Gateway:
         return self.env.tool(tool) or {}
 
     def policy(self, route: A.Route | None = None) -> Policy:
-        if route is not None:
-            return route.policy()
-        return Policy(schemas=self._cfg("postgres").get("schemas"), indices=self._cfg("elastic").get("indices"),
-                      key_prefixes=self._cfg("redis").get("key_prefixes"))
+        return route.policy() if route is not None else Policy()
 
     # ------------------------------------------------------------------ registry
     def add(self, name, description, schema, risk, fn):
@@ -435,7 +430,7 @@ class Gateway:
                 "note": "Patterns name a route (default: 'default'). To add a route, submit it with proposal.submit."}
 
     def _kubectl_meta(self, args: list[str], context: str | None):
-        ex = self.env.exec_for("postgres")
+        ex = self.env.exec_for(None)
         return self.backends.run(ex, kubetools.command(ex, args, context), timeout=30, max_bytes=20_000)
 
     def _proposal_submit(self, a: dict) -> dict:
@@ -517,12 +512,8 @@ class Gateway:
             P.validate(p, self.policy(route))
         except PatternError as e:
             raise ToolError(f"pattern {p.name} is not allowed in this environment: {e}")
-        if p.risk != "read":
-            group = {"sql": "postgres", "elasticsearch": "elastic", "redis": "redis"}[p.kind]
-            if p.route is None:
-                self._need_approval(f"{p.kind}.{p.name}", bound, "write", group)
-            else:  # approved through a proposal: the pattern is enabled, each call still needs a human (SPEC 7.8)
-                self._ask_human(f"{p.kind}.{p.name}", bound, "write")
+        if p.risk != "read":   # an approved write pattern is enabled, and each call still needs a human (SPEC 7.8)
+            self._ask_human(f"{p.kind}.{p.name}", bound, "write")
         lim = p.limits
         if p.kind == "sql":
             sql, params = P.sql_bind(p, bound)
@@ -531,7 +522,7 @@ class Gateway:
             self._meta(rows=len(res.get("rows", [])) if isinstance(res, dict) else None)
             return res
         if route.transport == "exec":
-            ex = self.env.exec_for("elastic" if p.kind == "elasticsearch" else "redis")
+            ex = self.env.exec_for(None)
             argv = kubetools.command(ex, route.exec_args(), route.context or self.env.kube_context)
             self._meta(exec=ex.mode, via=route.target.workload)
             try:
@@ -570,7 +561,7 @@ class Gateway:
         """A statement that passed policy: over a DSN held here, or (exec) by the application's own connection in its pod."""
         if route.transport == "direct":
             return self.backends.sql(self.secret(route.secret, "postgres dsn"), sql, params, lim, require_replica=route.require_replica)
-        ex = self.env.exec_for("postgres")
+        ex = self.env.exec_for(None)
         argv = kubetools.command(ex, route.exec_args(), route.context or self.env.kube_context)
         self._meta(exec=ex.mode, host=ex.host, via=route.target.workload, argv=argv)
         try:

@@ -12,13 +12,13 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from airlock import gwserver
 from airlock import patterns as P
-from tests.test_gateway import Fake, ORDERS, env, G, Config, PatternStore, Audit  # noqa: F401
+from tests.test_gateway import Fake, ORDERS, env, routes, G, Config, PatternStore, Audit  # noqa: F401
 
 
 @pytest.fixture
 def server(tmp_path, monkeypatch):
     monkeypatch.setattr("airlock.audit.HOME", tmp_path)
-    store = PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json")
+    store = routes(PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json"))
     gw = G.Gateway(env(), Config(), session_id="m1", snapshot=store.snapshot, inbox=tmp_path / "inbox", backends=Fake(),
                    secrets={"PG_DSN": "postgres://u:pw@db/x"})
     s = socket.socket()

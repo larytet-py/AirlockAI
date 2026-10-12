@@ -17,9 +17,14 @@ environments:
     kube_context: uat-ctx
     exec: {mode: direct}
     tools:
-      - postgres: {dsn_env: PG_DSN, mode: read, schemas: [public]}
       - kubernetes: {mode: read, namespaces: [app]}
 """
+
+
+def pg_route(env="uat"):
+    """An approved direct Postgres route, as the approval flow stores it."""
+    from airlock import access
+    patternstore.PatternStore().put_route(access.Route(env=env, kind="postgres", transport="direct", secret="PG_DSN", schemas=["public"]), by="test")
 
 
 @pytest.fixture
@@ -34,6 +39,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(envs, "HOME", tmp_path)
     monkeypatch.setattr(envs, "kubectl_contexts", lambda timeout=10: ["uat-ctx", "prod-eu", "kind-dev"])
     monkeypatch.setattr(envs, "context_status", lambda c, timeout=8: {"up": c != "prod-eu", "nodes": 3, "ms": 12, "error": "" if c != "prod-eu" else "refused"})
+    pg_route()
     c = TestClient(ui.make_app(str(p)), base_url="http://127.0.0.1:8800", follow_redirects=True)
     c.cfg, c.tmp = p, tmp_path
     return c
@@ -115,11 +121,12 @@ def test_environment_admin_writes_back_to_the_config(client):
     page = client.get("/prod").text
     assert "Tags and labels" not in page and "Apply tags" not in page and "/meta" not in page      # no tag editor in the UI
     assert client.post("/prod/envs/uat/meta", data={"tags": "x=1"}).status_code in (404, 405)
-    client.post("/prod/envs/uat/tools", data={"on_postgres": "1", "mode_postgres": "approve_writes", "cfg_postgres": "dsn_env=PG_DSN,schemas=public|app",
-                                               "on_redis": "1", "mode_redis": "read", "cfg_redis": "url_env=REDIS_URL,key_prefixes=session:"})
+    assert 'name="on_postgres"' not in client.get("/prod").text and "on_postgres" not in client.get("/prod").text   # stores are routes
+    client.post("/prod/envs/uat/tools", data={"on_airflow": "1", "mode_airflow": "approve_writes", "cfg_airflow": "url_env=AF_URL",
+                                               "on_slack": "1", "cfg_slack": "channels=alerts|ops"})
     e = envs.environment(C.load_config(client.cfg), "uat")
-    assert e.tool("postgres") == {"dsn_env": "PG_DSN", "schemas": ["public", "app"], "mode": "approve_writes"}
-    assert e.tool("redis")["key_prefixes"] == ["session:"] and e.tool("kubernetes") is None
+    assert e.tool("airflow") == {"url_env": "AF_URL", "mode": "approve_writes"}
+    assert e.tool("slack")["channels"] == ["alerts", "ops"] and e.tool("kubernetes") is None
     client.post("/prod/envs/uat/rename", data={"new": "uat2"})
     assert envs.environment(C.load_config(client.cfg), "uat2")
     client.post("/prod/envs/bulk-delete", data={"sel": ["uat2", "kind-dev"]})
@@ -133,7 +140,7 @@ def test_bad_environment_is_refused_and_file_untouched(client):
     assert client.cfg.read_text() == before
     r = client.post("/prod/envs", data={"name": "uat", "context": "x"})
     assert "already exists" in r.text
-    r = client.post("/prod/envs/uat/tools", data={"on_postgres": "1", "cfg_postgres": "bogus=1"})
+    r = client.post("/prod/envs/uat/tools", data={"on_airflow": "1", "cfg_airflow": "bogus=1"})
     assert "unknown setting" in r.text and client.cfg.read_text() == before
 
 
@@ -253,7 +260,7 @@ def test_access_page_groups_by_kind_and_transport_with_usage(client):
     page = client.get("/settings/access?kind=postgres").text
     assert "Postgres" in page and "Elasticsearch" in page and "Redis" in page          # tabs by store kind
     assert "Direct (the gateway connects with a secret)" in page and "uat/postgres/default" in page
-    assert "from config" in page and "orders_by_status" in page
+    assert "from config" not in page and "orders_by_status" in page
     row = page[page.index('value="orders_by_status"'):]
     assert ">3<" in row and ">1<" in row                                       # calls, errors
     detail = client.get("/settings/access/pattern/orders_by_status").text
@@ -265,9 +272,10 @@ def test_propose_for_environment_needs_its_own_approval(client):
     text = CFG + """  - name: prd
     kube_context: prod-eu
     tools:
-      - postgres: {dsn_env: PG_DSN, mode: read, schemas: [public]}
+      - kubernetes: {mode: read}
 """
     client.cfg.write_text(text)
+    pg_route("prd")
     pid = queue_proposal(client)
     client.get("/prod")
     client.post("/prod/waiting/bulk", data={"item": f"{pid}:q0", "action": "approve"})
@@ -410,8 +418,7 @@ def test_tools_form_survives_and_keeps_config_defined_kubectl_commands(client):
                           "            - {name: roles, argv: [get, pods], description: d}\n")
     page = client.get("/prod").text
     assert "kubectl_commands" in page and "Traceback" not in page                       # the list-of-dicts setting renders
-    client.post("/prod/envs/uat/tools", data={"on_postgres": "1", "mode_postgres": "read", "cfg_postgres": "dsn_env=PG_DSN",
-                                               "on_kubectl_commands": "1", "mode_kubectl_commands": "approve_writes", "cfg_kubectl_commands": ""})
+    client.post("/prod/envs/uat/tools", data={"on_kubectl_commands": "1", "mode_kubectl_commands": "approve_writes", "cfg_kubectl_commands": ""})
     tool = envs.environment(C.load_config(client.cfg), "uat").tool("kubectl_commands")
     assert tool["mode"] == "approve_writes" and tool["commands"][0]["name"] == "roles"   # edited mode, commands preserved
 

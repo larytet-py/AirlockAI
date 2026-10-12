@@ -275,9 +275,7 @@ exec:                        # how CLI-style tools run: direct | ssh | ssh_sudo 
   host: uat-bastion.example.com
 secrets_dir: ~/.airlock/secrets/uat
 tools:
-  - postgres:   {dsn_env: PG_DSN,        mode: read}
-  - elastic:    {url_env: ES_URL,        mode: read}
-  - redis:      {url_env: REDIS_URL,     mode: read}
+  # no postgres / elastic / redis here: data stores are approved access routes (section 7.8)
   - kubernetes: {context: uat,           mode: read, namespaces: [app, gateway]}
   - remote_ops: {hosts: [JohnTestApi],   operations: [disk_usage, journal_tail]}   # named operations only; MCP uses ssh internally
   - airflow:    {url_env: AIRFLOW_URL,   mode: read}
@@ -588,7 +586,7 @@ Safety properties:
 
 ### 7.7 Application shell execution (v1 database access)
 
-Database access through the application's shell is now an `exec` route with a built-in runner (section 7.8); the `postgres: {via: ...}` setting implements the `django` runner for SQL. The named scripts below remain for logic that is not a query.
+Database access through the application's shell is now an `exec` route with a built-in runner (section 7.8); the former `postgres: {via: ...}` setting is gone. The named scripts below remain for logic that is not a query.
 
 In v1 the gateway implements the database-facing part of the agent's API with the Python shell and the Django shell of the application container, instead of holding database credentials and a network path of its own. The application already has the connections, the models and the settings; the gateway only asks it to run a fixed script.
 
@@ -640,8 +638,8 @@ This section **replaces** the ways access is configured today:
 
 | Replaced | What it becomes |
 |---|---|
-| Hand-written data-store entries under `tools:` (`postgres: {dsn_env}`, `elastic: {url_env}`, `redis: {url_env}`) | Approved *access routes* with the `direct` transport. Existing entries are loaded as approved routes. |
-| `postgres: {via: {...}}` (SQL run in an application pod) | A route with the `exec` transport and the `django` runner. `via` is still read and migrated to a route on the next save. |
+| Hand-written data-store entries under `tools:` (`postgres: {dsn_env}`, `elastic: {url_env}`, `redis: {url_env}`) | Approved *access routes*. No backward compatibility: such an entry is refused when the config is loaded, with a message to remove it. |
+| `postgres: {via: {...}}` (SQL run in an application pod) | A route with the `exec` transport and the `django` runner. `via` is refused like the entries above. |
 | The database part of 7.7 (`django: {target, shell}` as the way to reach a store) | `exec` routes. Named scripts of 7.7 stay for logic that is not a query. |
 | `query.propose` producing a disabled pattern in a separate proposals list, and YAML import as the normal way to add patterns | A *proposal* that bundles routes and queries, is checked for feasibility by the MCP, and is approved in one place. YAML import and export stay for bulk changes and backups. |
 | Choosing tools and typing secret names in the "Add environment" wizard (section 7) | An environment is created from a kube context only. Data stores are added later as approved routes; a secret is entered when a route that needs one is approved. |
@@ -687,7 +685,7 @@ The check is code in the gateway. It consults no model, and the same proposal ag
 **Before approval the gateway does not probe:** it opens no connection to a data store, runs no `kubectl exec` and sends no request to any service. It only validates the proposal and reads Kubernetes object metadata:
 
 Routes:
-- the target workload exists (`kubectl get`), with the named container in its pod spec (as `check_sql_via` does for `via` today);
+- the target workload exists (`kubectl get`), with the named container in its pod spec ;
 - the runner is in the catalog and fits the kind and transport;
 - `direct`: the secret is set, or the item is flagged "needs secret" and the secret is entered at approval.
 
@@ -961,7 +959,7 @@ Milestones
    M5a - Query patterns (could move before M4 if databases are the first need): pattern store and versions, UI add/edit/remove/enable, SQL/ES/Redis validators, named-call tools, raw-command matching, `query.propose`, test run, YAML import/export. Done when: a pattern added in the UI is accepted from the agent within a second without restart; the same query with a different literal in a non-placeholder position is rejected; removing the pattern rejects the next call; an injection attempt in a placeholder value (`1; drop table x`, `{"script": ...}`, `x\r\nFLUSHALL`) is rejected or bound as inert data.
 6. M6 - Hardening and multi-user use: gVisor/microVM level, SSM/Instance Connect keys, shared-host deployment, export to the artifact store, docs.
 7. M7 - Shared gateway (target deployment). The gateway is a privileged service deployed by DevOps and used by all agents, including interventions in production through approved write tools. Its power is bounded by what it exposes (named kubectl commands, query patterns, operations), approvals and audit, not by a weak identity. Requirements in section 12.1.
-8. M8 - Agent-proposed access (section 7.8), in this order: (a) transports and runners for all three stores, generalising `via`; (b) `proposal.submit` / `proposal.status` with the feasibility check; (c) the UI split: proposals and recent patterns in `PROD`, the catalogue in Settings, `Access`; (d) `airlock envs discover`; (e) migration of `tools:` entries and `via` to routes; (f) usage statistics from the audit, with `airlock stats rebuild`. Done when: from an empty environment (kube context only), an agent asked "number of orders yesterday and today" submits one proposal, the human approves it with one click, and the agent answers; an infeasible item (a workload the cluster does not run, a query that fails validation) is refused back to the agent without reaching the human, and nothing connects to a data store before the approval.
+8. M8 - Agent-proposed access (section 7.8), in this order: (a) transports and runners for all three stores, generalising `via`; (b) `proposal.submit` / `proposal.status` with the feasibility check; (c) the UI split: proposals and recent patterns in `PROD`, the catalogue in Settings, `Access`; (d) `airlock envs discover`; (e) removal of the data-store `tools:` entries and `via` (no migration); (f) usage statistics from the audit, with `airlock stats rebuild`. Done when: from an empty environment (kube context only), an agent asked "number of orders yesterday and today" submits one proposal, the human approves it with one click, and the agent answers; an infeasible item (a workload the cluster does not run, a query that fails validation) is refused back to the agent without reaching the human, and nothing connects to a data store before the approval.
 
 Implementation status (Mode 2)
 
@@ -973,7 +971,7 @@ Implemented and covered by tests (unit tests with fake connectors, plus `tests/t
 - Gateway sessions: internal network, egress proxy for the model API only, gateway container (read-only, no capabilities, no Docker socket, secrets mounted into it only), agent container with `MCP_URL` and `MCP_TOKEN` only and no ssh/kubectl. Cleanup on stop. `airlock session start --env uat [--count N]`; one gateway, token and audit trail per agent.
 - UI: the `EC2` and `PROD` tabs (section 9); `airlock test` policy self-checks; `airlock envs`.
 
-Also built: per-session Kubernetes tokens from the host's exec plugin (4.1); session networks with the uplink MTU and a subnet that overlaps no host route; SQL patterns run in an application pod with `postgres: {via: ...}` (the `django` runner of 7.8, READ ONLY and rolled back) with a check that the target exists.
+Also built: per-session Kubernetes tokens from the host's exec plugin (4.1); session networks with the uplink MTU and a subnet that overlaps no host route; SQL patterns run in an application pod (the `django` runner of 7.8, READ ONLY and rolled back).
 
 Also built (7.8, M8 a-c, e, f): access routes (`direct`; `exec` with the `django` runner for Postgres), `access.list`,
 `proposal.submit` with the pre-approval feasibility check (validation and `kubectl get` only) and `proposal.status`; the
@@ -981,8 +979,8 @@ controller's import, per-item approve / reject with a note, the activation probe
 `Propose for environment`; the PROD tab's proposals and recently approved box and Settings › Access (tabs by kind,
 grouped by transport and route, search, filters, sorting, paging, click-to-edit and rename, bulk actions, import and
 export); usage statistics from the audit (`airlock stats [rebuild]`, per-pattern detail page); `airlock proposals`.
-The config's `tools:` entries load as routes "from config" and are not rewritten. Routes and patterns live in the store
-and its snapshot (exported as YAML), not in the config file.
+Routes and patterns live only in the store and its snapshot (exported as YAML); the config file's data-store `tools:`
+entries and `via` were removed, with no backward compatibility.
 
 Also built: `files` routes (exec, `python` runner, `files.*` tools, Settings › Access `Files` tab with per-route usage).
 

@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from airlock import access as A
 from airlock import gateway as G
 from airlock import patterns as P
 from airlock import runner
@@ -46,17 +47,23 @@ class Fake:
 
 def env(tools=None, **kw):
     return Environment.model_validate({"name": "uat", "kube_context": "uat-ctx", "tools": tools or [
-        {"postgres": {"dsn_env": "PG_DSN", "mode": "read", "schemas": ["public"]}},
-        {"elastic": {"url_env": "ES_URL", "indices": ["events-*"]}},
-        {"redis": {"url_env": "REDIS_URL", "key_prefixes": ["session:"]}},
         {"kubernetes": {"mode": "read", "namespaces": ["app"]}},
     ], **kw})
+
+
+def routes(store, env_name="uat", **pg):
+    """The approved direct routes the tests query through (what a human approved in the PROD tab)."""
+    for r in (A.Route(env=env_name, kind="postgres", transport="direct", secret="PG_DSN", schemas=["public"], **pg),
+              A.Route(env=env_name, kind="elasticsearch", transport="direct", secret="ES_URL", indices=["events-*"]),
+              A.Route(env=env_name, kind="redis", transport="direct", secret="REDIS_URL", key_prefixes=["session:"])):
+        store.put_route(r, by="test")
+    return store
 
 
 @pytest.fixture
 def gw(tmp_path, monkeypatch):
     monkeypatch.setattr("airlock.audit.HOME", tmp_path)
-    store = PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json")
+    store = routes(PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json"))
     fake = Fake()
     g = G.Gateway(env(), Config(), session_id="s1", snapshot=store.snapshot, inbox=tmp_path / "inbox", backends=fake,
                   secrets={"PG_DSN": "postgres://u:SuperSecretPw@db/x", "ES_URL": "http://es:9200", "REDIS_URL": "redis://r"},
@@ -195,8 +202,10 @@ def test_kubernetes_policy_and_execution_modes(gw):
 
 
 def test_kubernetes_per_tool_exec_override(tmp_path):
-    e = env(tools=[{"kubernetes": {"mode": "read", "exec": {"mode": "ssh", "host": "h"}}}, {"postgres": {"dsn_env": "PG_DSN"}}])
-    assert e.exec_for("kubernetes").mode == "ssh" and e.exec_for("postgres").mode == "direct"
+    e = env(tools=[{"kubernetes": {"mode": "read", "exec": {"mode": "ssh", "host": "h"}}}])
+    assert e.exec_for("kubernetes").mode == "ssh" and e.exec_for(None).mode == "direct"
+    with pytest.raises(Exception, match="data stores are no longer configured here"):
+        env(tools=[{"postgres": {"dsn_env": "PG_DSN"}}])
 
 
 def test_mutating_tools_off_by_default_and_need_approval(gw):
@@ -303,10 +312,10 @@ def test_slack_untrusted_and_channel_allowlist(gw):
 def test_require_replica_is_passed_to_the_driver_and_enforced(tmp_path, monkeypatch):
     # gateway side: the setting reaches the backend for patterns and for the fixed helpers
     monkeypatch.setattr("airlock.audit.HOME", tmp_path)
-    store = PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json")
+    store = routes(PatternStore(tmp_path / "db.sqlite", tmp_path / "snap" / "snapshot.json"), require_replica=True)
     store.upsert(ORDERS)
     fake = Fake()
-    e = env(tools=[{"postgres": {"dsn_env": "PG_DSN", "require_replica": True, "schemas": ["public"]}}])
+    e = env()
     g = G.Gateway(e, Config(), session_id="r1", snapshot=store.snapshot, inbox=tmp_path / "i", backends=fake, secrets={"PG_DSN": "postgres://x"}, audit=Audit("r1"))
     assert g.call("sql.orders_by_status", {})["ok"] and fake.sql_kw == {"require_replica": True}
     assert g.call("sql.list_tables", {})["ok"] and fake.sql_kw == {"require_replica": True}
