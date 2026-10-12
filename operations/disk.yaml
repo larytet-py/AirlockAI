@@ -1,0 +1,5 @@
+name: disk
+description: Filesystem usage and docker disk usage
+risk: read
+run: |
+  df -h; (docker system df 2>/dev/null || true)

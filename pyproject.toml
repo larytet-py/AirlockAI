@@ -1,0 +1,39 @@
+[project]
+name = "airlockai"
+version = "0.1.0"
+description = "Run AI coding agents next to real infrastructure without handing them the keys"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "jinja2>=3.1",
+    "websockets>=17.2",
+    "python-multipart>=0.0.32",
+    "ruamel-yaml>=0.19.1",
+    "mcp<2",
+    "pglast>=8.4",
+    "psycopg[binary]>=3.3.6",
+    "redis>=8.1.0",
+]
+
+[project.scripts]
+airlock = "airlock.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["airlock"]
+
+[tool.pytest.ini_options]
+markers = ["integration: needs docker and a real test node (AIRLOCK_CONFIG)"]
+addopts = "-m 'not integration'"

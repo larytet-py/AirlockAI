@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""airlock-run <node> -- <command...>: run a command on a session node using the node's execution mode."""
+import json
+import os
+import shlex
+import sys
+
+NODES = "/airlock/nodes.json"
+
+
+def main(argv):
+    if len(argv) < 3 or argv[1] == "--help" or "--" not in argv[1:]:
+        sys.exit("usage: airlock-run <node> -- <command...>")
+    name = argv[1]
+    cmd = argv[argv.index("--") + 1:]
+    nodes = {n["name"]: n for n in json.load(open(NODES))}
+    if name not in nodes:
+        sys.exit(f"unknown node {name!r}; session nodes: {', '.join(nodes)}")
+    if not cmd or any("\n" in a or "\0" in a for a in cmd):
+        sys.exit("empty command, or arguments with newline/NUL")
+    mode = nodes[name].get("mode", "ssh")
+    remote = (["sudo", "-n"] if mode == "ssh_sudo" else []) + cmd
+    os.execvp("ssh", ["ssh", name, "--", shlex.join(remote)])
+
+
+main(sys.argv)

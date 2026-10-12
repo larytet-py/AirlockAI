@@ -1,0 +1,14 @@
+# Mode 2 agent image: Claude Code only. No ssh client (only sshd, so you can ssh in; the ssh binaries are removed), no kubectl, no database or cloud clients: its whole reach is the MCP gateway.
+FROM node:22-bookworm-slim
+ARG UID=1000
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 openssh-server less procps jq \
+    && rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_* \
+    && mkdir -p /run/sshd \
+    && rm -f /usr/bin/ssh /usr/bin/scp /usr/bin/sftp /usr/bin/ssh-add /usr/bin/ssh-agent /usr/bin/ssh-keyscan /usr/bin/ssh-copy-id \
+    && npm install -g @anthropic-ai/claude-code \
+    && (id -u ${UID} >/dev/null 2>&1 && userdel -r $(id -un ${UID}) || true) \
+    && useradd -m -u ${UID} -s /bin/bash agent
+ENV HOME=/home/agent
+USER agent
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

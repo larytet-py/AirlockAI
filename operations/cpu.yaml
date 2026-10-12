@@ -1,0 +1,5 @@
+name: cpu
+description: Top CPU consumers and load
+risk: read
+run: |
+  uptime; ps -eo pid,pcpu,pmem,comm --sort=-pcpu | head -15
