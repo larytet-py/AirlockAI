@@ -21,7 +21,7 @@ TOOLS = {  # tool server -> allowed config keys
     "disk": {"mounts", "mode", "max_bytes"},
     "django": {"mode", "url_env", "queries"},
     "slack": {"channels", "deny_dm", "token_env"},
-    "jira": {"url", "projects", "user_env", "token_env"},
+    "jira": {"url", "url_env", "projects", "user_env", "token_env"},   # url_env (default JIRA_URL) or a literal url
 }
 
 

@@ -18,6 +18,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from . import access as A, kubetools, patterns as P
 from .audit import Audit
@@ -156,8 +157,7 @@ class Gateway:
         self.backends = backends or Backends()
         self.audit = audit or Audit(session_id)
         self.secrets = secrets if secrets is not None else load_secrets(env.secrets_path())
-        for v in self.secrets.values():
-            register_secret(v)  # masked in every result and log line
+        self._mask(self.secrets)
         self.reader = SnapshotReader(snapshot)
         self.approvals = ApprovalQueue(inbox, approval_timeout)
         self.rate = rate_per_min
@@ -179,13 +179,27 @@ class Gateway:
             raise ToolError(f"{what}: {ref} is not set in the environment's secrets")
         return v
 
+    def _mask(self, secrets: dict[str, str]) -> None:
+        """Register every secret value for masking in results and log lines, except the base URLs of Jira and Airflow:
+        they are not secrets, and masking them would hide the host from every link the agent returns. A URL that
+        carries credentials (user:password@host) stays masked."""
+        public = set()
+        for tool, default in (("jira", "JIRA_URL"), ("airflow", None)):
+            if self.env.tool(tool) is not None:
+                ref = self._cfg(tool).get("url_env") or default
+                if ref:
+                    public.add(ref)
+        for k, v in secrets.items():
+            if k in public and not urlparse(v).username and not urlparse(v).password:
+                continue
+            register_secret(v)  # masked in every result and log line
+
     def _reload_secrets(self) -> bool:
         d = os.environ.get("AIRLOCK_SECRETS_DIR")
         if not d:
             return False
         fresh = load_secrets(Path(d))
-        for v in fresh.values():
-            register_secret(v)
+        self._mask(fresh)
         changed = fresh != self.secrets
         self.secrets = fresh
         return changed
@@ -807,7 +821,7 @@ class Gateway:
 
     def _jira(self, path: str, query: dict | None = None) -> Any:
         cfg = self._cfg("jira")
-        base = (cfg.get("url") or "").rstrip("/")
+        base = (cfg.get("url") or self.secret(cfg.get("url_env", "JIRA_URL"), "jira url")).rstrip("/")
         if not base.startswith("https://"):
             raise ToolError("jira url must be https")
         auth = base64_basic(self.secret(cfg.get("user_env", "JIRA_USER"), "jira user"), self.secret(cfg.get("token_env", "JIRA_API_TOKEN"), "jira token"))

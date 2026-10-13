@@ -34,16 +34,14 @@ environment; credentials stay in the gateway container. Mutating tools are off u
 <h2 id=waiting>Waiting for approval <small class=lbl>(calls blocked right now, and new access agents ask for)</small></h2><div id=wait>{waiting}</div>
 <h2>Clusters <small class=lbl>(from the local kubectl contexts and the config file)</small></h2>
 <form id=ebulk method=post action=/prod/sessions class=add><b>Selected clusters:</b>
-<button formaction=/prod/sessions onclick="return startingMsg(this)" title="unregistered contexts are registered first (direct, kubernetes read-only)">Start session on selected</button>
-<button formaction=/prod/register>Register selected</button>
-<button formaction=/prod/envs/bulk-delete onclick="return confirm('Remove the selected environments from the config? The clusters and your kubeconfig are not touched.')">Remove from list</button></form>
-<table id=envs><tr><th><input type=checkbox id=eall title="select all"><th>Name <small class=lbl>(click to rename)</small><th>Status: reachable, nodes, latency<th>Links<th>Exec<th>Tools</tr>{envrows}</table>
-<details><summary>Add environment</summary><form method=post action=/prod/envs class=add>
+<button formaction=/prod/sessions onclick="return startingMsg(this)">Start session on selected</button></form>
+<style>#envscroll th{{position:sticky;top:0;background:Canvas;z-index:1}}</style><div id=envscroll style="max-height:26rem;overflow-y:auto"><table id=envs><tr><th><input type=checkbox id=eall title="select all"><th>Name <small class=lbl>(click to rename)</small><th>Status: reachable, nodes, latency<th>Links<th>Exec<th>Tools</tr>{envrows}</table></div>
+<details><summary>Add environment</summary><p style="margin:.4rem 0"><form method=post action=/prod/rescan style="display:inline"><button>Rescan local kubectl contexts</button></form> <span class=lbl>every kubectl context is an environment; a rescan adds new ones</span></p>
+<form method=post action=/prod/envs class=add>
 <input name=name placeholder="name (e.g. uat)" required pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{{0,63}}"> <input name=context list=ctxs placeholder="kube context"><datalist id=ctxs>{ctx_options}</datalist>
 <select name=mode><option>direct<option>ssh<option>ssh_sudo</select> <input name=host placeholder="ssh host (ssh modes)"> <input name=user placeholder="user (default $USER_NAME)">
 <br>Tools: {tool_checks}<br>
 <label><input type=checkbox name=check value=1 checked> check first: <code>kubectl --context X get ns</code> (or the ssh variant)</label> <button>Add</button></form></details>
-<p><a href=/prod>Rescan local kubectl contexts</a>{hidden_note}</p>
 <h2>AI Sessions</h2>
 <form id=sbulk method=post class=add><button formaction=/prod/sessions/bulk-stop onclick="return confirm('Stop selected sessions?')">Stop selected</button>
 <button formaction=/prod/sessions/bulk-delete onclick="return confirm('Delete selected sessions? Running ones are stopped first.')">Delete selected</button>
@@ -54,7 +52,7 @@ environment; credentials stay in the gateway container. Mutating tools are off u
 </main>
 <script>
 function startingMsg(b){{setTimeout(()=>{{b.disabled=true;b.textContent='Starting\\u2026 (15-40 s)'}},0);return true}}
-document.getElementById('eall').onchange=e=>document.querySelectorAll('#envs input[name=sel],#envs input[name=ctx]').forEach(c=>c.checked=e.target.checked);
+document.getElementById('eall').onchange=e=>document.querySelectorAll('#envs input[name=sel]').forEach(c=>c.checked=e.target.checked);
 document.getElementById('all').onchange=e=>document.querySelectorAll('#sess input[name=ssel]').forEach(c=>c.checked=e.target.checked);
 async function etick(){{try{{const r=await fetch('/api/prod/stats');if(!r.ok)return;const d=await r.json();
   for(const [k,s] of Object.entries(d)){{const row=document.querySelector(`tr[data-env="${{k}}"]`);if(!row)continue;const q=n=>row.querySelector(`[data-n=${{n}}]`);
@@ -112,7 +110,6 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
     # ------------------------------------------------------------------ rendering
     def env_rows(cfg) -> str:
         registered = E.environments(cfg)
-        known_ctx = {x.kube_context for x in registered if x.kube_context}
         templates = (cfg.defaults or {}).get("links", {}) or {}
         rows = ""
         for env in registered:
@@ -136,13 +133,6 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
                       if env.kube_context else '<span class=lbl>no kube context</span>')
             rows += (f'<tr data-env="{n}"><td><input type=checkbox name=sel value="{n}" form=ebulk><td>{name}'
                      f'<td>{status}<td>{links}<td>{mode}<td>{tools}{secbit}{tool_form}</tr>')
-        hidden = hidden_contexts()
-        for c in E.kubectl_contexts():
-            if c in known_ctx or c in hidden:
-                continue
-            k = e(c)
-            rows += (f'<tr data-env="{k}"><td><input type=checkbox name=ctx value="{k}" form=ebulk><td><b>{k}</b><br><span class=tag>local kubectl context, not registered</span>'
-                     f'<td><div class=chips><span class=chip data-n=dot>&hellip;</span><span class=chip data-n=info></span></div><td><td colspan=2></tr>')
         return rows or '<tr><td colspan=6><span class=lbl>No kubectl contexts found and no environments in the config. Use "Add environment".</span></tr>'
 
     def tools_form(env: E.Environment) -> str:
@@ -195,7 +185,7 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
         cfg = load_config(config_path)
         ctx = "".join(f'<option value="{e(c)}">' for c in E.kubectl_contexts())
         checks = " ".join(f'<label><input type=checkbox name="on_{t}" value=1 {"checked" if t == "kubernetes" else ""}> {t}</label>' for t in sorted(E.TOOLS))
-        body = PAGE.format(base_css=base_css, css=CSS, nav=nav_html("prod"), error=e(error), envrows=env_rows(cfg), hidden_note=(f' &middot; <form method=post action=/prod/contexts/unhide style="display:inline"><button>Show {len(hidden_contexts())} hidden context(s)</button></form>' if hidden_contexts() else ""), ctx_options=ctx, tool_checks=checks,
+        body = PAGE.format(base_css=base_css, css=CSS, nav=nav_html("prod"), error=e(error), envrows=env_rows(cfg), ctx_options=ctx, tool_checks=checks,
                            waiting=access["waiting"](), sessions=session_rows(), patterns=access["fragment"](),
                            access_css=access["css"], access_js=access["js"])
         return tab_response(body)
@@ -261,19 +251,29 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
             E.add_environment(config_path, spec)
         return back(go)
 
-    @app.post("/prod/register")
-    def register(ctx: list[str] = Form([]), context: str = Form("")):
-        names = ctx + ([context] if context else [])
-
-        def go():
-            if not names:
-                raise ConfigError("select at least one unregistered context")
-            known = E.kubectl_contexts()
-            if any(c not in known for c in names):
-                raise ConfigError("unknown kubectl context")
-            for c in names:
+    def auto_register() -> list[str]:
+        """Every local kubectl context is an environment (direct, kubernetes read-only): add the ones not in the config yet."""
+        added = []
+        cfg = load_config(config_path)
+        have = {x.kube_context for x in E.environments(cfg) if x.kube_context}
+        for c in E.kubectl_contexts():
+            if c in have:
+                continue
+            try:
                 E.add_environment(config_path, E.env_spec(E.sanitise_name(c), context=c))
-        return back(go)
+                added.append(c)
+            except ConfigError:   # the name is taken by another environment: leave it to "Add environment"
+                pass
+        return added
+
+    @app.post("/prod/rescan")
+    def rescan():
+        return back(auto_register)
+
+    try:
+        auto_register()   # at start, so the clusters of the kubeconfig are listed without any step
+    except Exception:
+        pass
 
     @app.post("/prod/envs/{name}/rename")
     def env_rename(name: str, new: str = Form(...)):
@@ -288,29 +288,9 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
     def env_mode(name: str, mode: str = Form(...), host: str = Form("")):
         return back(lambda: E.set_env_exec(config_path, name, mode, host))
 
-    def hidden_contexts() -> set[str]:
-        """Unregistered kubectl contexts the user removed from the list (local to this machine; the kubeconfig is untouched)."""
-        try:
-            return set(json.loads((HOME / "hidden_contexts.json").read_text()))
-        except (OSError, ValueError):
-            return set()
-
-    def save_hidden(names: set[str]) -> None:
-        (HOME / "hidden_contexts.json").write_text(json.dumps(sorted(names)))
-
-    @app.post("/prod/contexts/unhide")
-    def contexts_unhide():
-        return back(lambda: save_hidden(set()))
-
     @app.post("/prod/envs/bulk-delete")
-    def env_bulk_delete(sel: list[str] = Form([]), ctx: list[str] = Form([])):
+    def env_bulk_delete(sel: list[str] = Form([])):
         def go():
-            if not sel and not ctx:
-                raise ConfigError("select at least one cluster")
-            if ctx:   # not registered: nothing in the config to remove, so hide it from this list
-                save_hidden(hidden_contexts() | set(ctx))
-            if not sel:
-                return
             busy = {n: [s["id"] for s in gwsession.gateway_sessions() if s.get("environment") == n] for n in sel}
             busy = {n: v for n, v in busy.items() if v}
             if busy:

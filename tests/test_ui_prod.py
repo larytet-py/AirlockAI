@@ -37,10 +37,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(patternstore, "SNAPSHOT", tmp_path / "patterns" / "snapshot.json")
     monkeypatch.setattr(ui_prod, "HOME", tmp_path)
     monkeypatch.setattr(envs, "HOME", tmp_path)
-    monkeypatch.setattr(envs, "kubectl_contexts", lambda timeout=10: ["uat-ctx", "prod-eu", "kind-dev"])
+    monkeypatch.setattr(envs, "kubectl_contexts", lambda timeout=10: ["uat-ctx"])   # at start only the registered one: nothing is added
     monkeypatch.setattr(envs, "context_status", lambda c, timeout=8: {"up": c != "prod-eu", "nodes": 3, "ms": 12, "error": "" if c != "prod-eu" else "refused"})
     pg_route()
     c = TestClient(ui.make_app(str(p)), base_url="http://127.0.0.1:8800", follow_redirects=True)
+    monkeypatch.setattr(envs, "kubectl_contexts", lambda timeout=10: ["uat-ctx", "prod-eu", "kind-dev"])   # new contexts appear on a rescan
     c.cfg, c.tmp = p, tmp_path
     return c
 
@@ -70,8 +71,10 @@ def test_two_tabs_on_the_left_and_choice_is_remembered(client):
 def test_prod_lists_local_kubectl_contexts_not_ec2_nodes(client):
     page = client.get("/prod").text
     assert "uat" in page and "context uat-ctx" in page                        # registered environment
-    assert "prod-eu" in page and "kind-dev" in page                           # discovered, not registered
-    assert page.count("not registered") == 2
+    assert "prod-eu" not in page.split("<h2>Clusters")[1].split("<details>")[0]   # a new context shows up on a rescan
+    client.post("/prod/rescan")
+    page = client.get("/prod").text
+    assert "prod-eu" in page and "kind-dev" in page and "not registered" not in page   # every context is an environment
     assert 'href="https://logs.example.com/uat-ctx"' in page                  # {context} link pattern; {instance_id} one is skipped
     clusters = page.split("<h2>Clusters")[1].split("<h2>Claude")[0]
     assert "web-" not in clusters                                              # {instance_id} links are for EC2 rows only
@@ -82,13 +85,13 @@ def test_prod_lists_local_kubectl_contexts_not_ec2_nodes(client):
 def test_no_row_buttons_only_checkboxes_and_bulk_actions(client):
     page = client.get("/prod").text
     bar, rows = page.split("<h2>Clusters")[1].split("<table id=envs>")[0], page.split("<table id=envs>")[1].split("</table>")[0]
-    assert "Start session on selected" in bar and "Register selected" in bar and "Remove from list" in bar   # bulk bar sits above the table
+    assert "Start session on selected" in bar and "Remove from list" not in bar and "Register selected" not in bar   # bulk bar sits above the table
     assert "<button" not in rows.replace("<button>Save</button>", "").replace("<button>Set secret</button>", "").replace("<button>Save tools</button>", "")
-    assert rows.count("name=ctx") == 2 and 'name=sel value="uat"' in rows
-    assert "Start session on selected" in page and "Register selected" in page
-    client.post("/prod/register", data={"ctx": ["kind-dev", "prod-eu"]})
+    assert "name=ctx" not in rows and 'name=sel value="uat"' in rows
+    # every local kubectl context is an environment: no separate registration, a rescan adds new ones
+    assert {e.name for e in envs.environments(C.load_config(client.cfg))} == {"uat"}
+    client.post("/prod/rescan")
     assert {e.name for e in envs.environments(C.load_config(client.cfg))} == {"uat", "kind-dev", "prod-eu"}
-    assert "unknown kubectl context" in client.post("/prod/register", data={"ctx": ["nope"]}).text
 
 
 def test_sessions_are_separated_by_tab(client):
@@ -111,7 +114,7 @@ def test_gateway_sessions_cannot_be_stopped_from_the_ec2_side_by_mistake(client)
 
 
 def test_environment_admin_writes_back_to_the_config(client):
-    r = client.post("/prod/register", data={"ctx": ["kind-dev"]})
+    r = client.post("/prod/rescan")
     cfg = C.load_config(client.cfg)
     e = envs.environment(cfg, "kind-dev")
     assert e.kube_context == "kind-dev" and e.exec_for("kubernetes").mode == "direct" and e.tool("kubernetes") == {"mode": "read"}
@@ -129,7 +132,7 @@ def test_environment_admin_writes_back_to_the_config(client):
     assert e.tool("slack")["channels"] == ["alerts", "ops"] and e.tool("kubernetes") is None
     client.post("/prod/envs/uat/rename", data={"new": "uat2"})
     assert envs.environment(C.load_config(client.cfg), "uat2")
-    client.post("/prod/envs/bulk-delete", data={"sel": ["uat2", "kind-dev"]})
+    client.post("/prod/envs/bulk-delete", data={"sel": ["uat2", "kind-dev", "prod-eu"]})
     assert C.load_config(client.cfg).environments == []
     assert "Add environment" in client.get("/prod").text
 
