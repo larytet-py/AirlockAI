@@ -55,7 +55,7 @@ function applyBulk(b){{const o=b.form.cmd.selectedOptions[0];
   b.formAction=o.value;return o.dataset.start?startingMsg(b):true}}
 function startingMsg(b){{const f=b.form||b.closest('form');
   setTimeout(()=>{{b.disabled=true;b.textContent='Starting\u2026 (15-30 s)'}},0);return true}}
-document.getElementById('nall').onchange=e=>document.querySelectorAll('input[name=sel]').forEach(c=>c.checked=e.target.checked);
+document.getElementById('nall').onchange=e=>document.querySelectorAll('#nodes input[name=sel]').forEach(c=>c.checked=e.target.checked);
 const gb=b=>b>=2**30?(b/2**30).toFixed(1)+' GB':(b/2**20).toFixed(0)+' MB';
 function cp(el){{const t=el.textContent,done=()=>{{el.textContent='copied';setTimeout(()=>el.textContent=t,800)}};
   (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(t):Promise.reject()).then(done,()=>{{
@@ -85,7 +85,7 @@ async function ntick(){{try{{
   }}
 }}catch(e){{}}}}
 ntick();setInterval(ntick,30000);
-document.getElementById('all').onchange=e=>document.querySelectorAll('input[name=ssel]').forEach(c=>c.checked=e.target.checked);
+document.getElementById('all').onchange=e=>document.querySelectorAll('#sess input[name=ssel]').forEach(c=>c.checked=e.target.checked);
 async function tick(){{try{{
   const r=await fetch('/api/sessions/stats');if(!r.ok)return;const d=await r.json();
   for(const [sid,s] of Object.entries(d)){{

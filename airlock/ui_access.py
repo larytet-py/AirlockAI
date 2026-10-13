@@ -126,6 +126,15 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
         names = [x.name for x in E.environments(cfg)]
         return names if p.scope == "global" else [n for n in names if p.in_scope(n)]
 
+    def shown_envs(p: Pattern, cfg) -> list[str]:
+        """The environments a pattern is listed under: the registered ones in its scope, plus scope names that are not
+        registered (the approved rules stay visible; their route then shows as not approved)."""
+        known = envs_of(p, cfg)
+        if p.scope == "global":
+            return known
+        scoped = [p.scope] if isinstance(p.scope, str) else p.scope
+        return known + [n for n in scoped if n not in known]
+
     # ------------------------------------------------------------------ PROD tab: proposals + recently approved
     def proposals_html(st: PatternStore, cfg) -> str:
         props = st.proposals("pending")
@@ -404,7 +413,7 @@ placeholder="query_patterns:\\n  - name: ..."></textarea><br><button>Import</but
                 continue
             if ql and ql not in f"{p.name} {p.description} {tpl_text(p)}".lower():
                 continue
-            for n in envs_of(p, cfg):
+            for n in shown_envs(p, cfg):
                 if env and n != env:
                     continue
                 key = f"{n}/{kind}/{p.route or 'default'}"
@@ -444,7 +453,7 @@ placeholder="query_patterns:\\n  - name: ..."></textarea><br><button>Import</but
             st_ = "" if p.enabled else ' <span class=lbl>disabled</span>'
             rows += (f'<tr><td><input type=checkbox name=sel value="{e(p.name)}" form=abulk><td>{name_cell(p.name, f"/prod/patterns/{e(p.name)}/rename")}'
                      f'<small class=lbl>{e(p.description)}</small>{st_}<br><a href="/settings/access/pattern/{quote(p.name)}">usage and history</a>'
-                     f'<td>{e(", ".join(envs_of(p, cfg)))}<td>{query_cell(tpl_text(p), {a: b.model_dump(exclude_none=True) for a, b in p.params.items()}, f"/prod/patterns/{e(p.name)}/edit")}'
+                     f'<td>{e(", ".join(shown_envs(p, cfg)))}<td>{query_cell(tpl_text(p), {a: b.model_dump(exclude_none=True) for a, b in p.params.items()}, f"/prod/patterns/{e(p.name)}/edit")}'
                      f'<td>{fmt_ts(at)}{stat_cells(stats.get(p.name))}</tr>')
         if not chunk:
             rows = f'<tr><td colspan={ncol}><span class=lbl>Nothing here yet.</span></tr>'

@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-client 
     && (id -u ${UID} >/dev/null 2>&1 && userdel -r $(id -un ${UID}) || true) \
     && useradd -m -u ${UID} -s /bin/bash airlock
 COPY pyproject.toml README.md /src/
+# Dependencies in their own layer: it is rebuilt only when pyproject.toml changes, not on every code change.
+RUN python -c "import tomllib;print(*tomllib.load(open('/src/pyproject.toml','rb'))['project']['dependencies'],sep='\n')" > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 COPY airlock /src/airlock
 COPY operations /src/operations
-RUN pip install --no-cache-dir /src && cp -r /src/operations /opt/airlock-operations
+RUN pip install --no-cache-dir --no-deps /src && cp -r /src/operations /opt/airlock-operations
 ENV AIRLOCK_HOME=/airlock-home AIRLOCK_BUILTIN_OPS=/opt/airlock-operations PYTHONUNBUFFERED=1
 USER airlock
 EXPOSE 8765
