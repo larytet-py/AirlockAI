@@ -34,7 +34,7 @@ uv run airlock image             # Mode 1 agent image (airlock-agent)
 docker images | grep airlock     # check it is there
 ```
 
-The first build takes a few minutes, mostly in the `apt-get install` step; let it finish. Rebuild after pulling changes
+The first build takes a few minutes, mostly in the `apt-get install` step; let it finish (later builds reuse cached layers; the gateway image caches its Python dependencies separately from the code). Rebuild after pulling changes
 to `agent-image/`. For Mode 2 also run `uv run airlock image --gateway`.
 
 ### 4. Set up the config file
@@ -80,6 +80,11 @@ Open **Settings** in the UI.
    nodes, and removes both when the session stops. The password is kept in the memory of the UI server only: it is
    never written to disk and is forgotten when the server stops, so enter it again after a restart. (Alternative:
    `export USER_NAME=... USER_PASSWORD=...` before `airlock ui`.)
+
+   If you have a public key in `~/.ssh/*.pub`, saving the login also installs those keys in `authorized_keys` and a
+   passwordless sudo rule (`/etc/sudoers.d/zz_<user>`, dots in the user name become `_`) on every remote node, in the
+   background, so your own `ssh <user>@<node>` works without a password. The same happens for nodes you add later. This
+   is permanent (not removed when a session stops); the result per node is in the audit (`personal_access`).
 2. **Claude sign-in**: run `claude setup-token` in a terminal, sign in, paste the token it prints and click
    **Save token**. New sessions then start signed in.
 3. **Source code**: add the folders the agent should see, for example `~/myproject`. Each appears in the agent
@@ -161,7 +166,8 @@ uv run airlock test --env uat                           # policy self-checks: fo
 
 Data stores are never configured in `airlock.yaml`: a `postgres`, `elastic` or `redis` entry under `tools:` (and `via`)
 is refused with a message to remove it. Access is an approved route in `~/.airlock/airlock.db`; prefer `exec` routes,
-which use the pod's own credentials and need no password. YAML import and export of patterns are in Settings › Access.
+which use the pod's own credentials and need no password. YAML import and export of patterns are in Settings › Access (CLI: `airlock patterns import FILE`, `export`); approved patterns are listed there
+even when their `scope` names an environment that is not registered.
 
 ssh into an agent container (rebuild the images once): `airlock ssh setup`, then `ssh <session id or name>` (user `agent`). Name a session by clicking its id in the UI or with `airlock session name ID NAME`.
 
@@ -187,13 +193,29 @@ For debugging your own test nodes on EC2 (typically 2-3 at a time).
 
 For investigating UAT or production.
 
-- The agent can only reach MCP servers that you wrote: Postgres, Elasticsearch, Redis, Kubernetes, SSH, disk, Django.
+- The agent can only reach MCP servers that you wrote: Postgres, Elasticsearch, Redis, Kubernetes, SSH, disk, Django, Airflow, Slack, Jira.
 - The MCP code runs in separate containers on your machine and loads credentials from your environment. The agent never sees them.
 - SQL, Elasticsearch and Redis queries are managed as patterns in the UI (add, edit, remove, enable). The agent can run only queries that match an enabled pattern, and a new pattern is accepted immediately.
 - Tools are classified read or mutating. Mutating tools are off by default and need approval in the UI.
 - The UI lets you add an environment (for example `kubectl --context uat get ns`) and start one or more agent containers wired to it.
 - Commands run directly, over SSH, or over SSH with sudo (`kubectl ...`, `ssh host kubectl ...`, `ssh host sudo kubectl ...`), chosen per node or environment. The tools adapt the commands automatically.
-- Every tool call is audited.
+- Every tool call is audited: `~/.airlock/audit/<session>.jsonl`, hash-chained, each record starting with `ts`, `node` and `ec2` (when known).
+- Environments are kubectl contexts: every context found by `kubectl config get-contexts` is registered automatically; **Rescan local kubectl contexts** (PROD tab, inside **Add environment**) picks up new ones.
+
+## Airflow, Slack and Jira tools
+
+Enable them per environment under `tools:` (see `airlock.example.yaml`); all are read-only. Credentials are never in the YAML,
+only the names of variables (`*_env`). Set the values in the PROD tab (the environment row, **Set secret**); they are stored in
+`~/.airlock/secrets/<env>/*.env` (0600), mounted read-only into the gateway container and masked in every result.
+
+| Tool | Settings | Secrets |
+|---|---|---|
+| `jira` | `url_env` (default `JIRA_URL`) or a literal `url`, `projects`, `user_env`, `token_env` | URL (https), user, API token |
+| `airflow` | `url_env` (required), `user_env`, `password_env` (basic auth, optional) | URL, user, password |
+| `slack` | `channels` (allowlist), `deny_dm`, `token_env` | bot token |
+
+Jira and Airflow base URLs are not masked (unless they embed credentials); every other secret value is. Rebuild the gateway
+image and start a new session after changing tool settings; restart `airlock ui` after pulling code.
 
 ## Configuration
 
@@ -208,6 +230,9 @@ Everything (nodes, operations, environments, query patterns, execution modes) li
 Permission modes, hooks and CLAUDE.md are part of the agent harness and can be bypassed by a bug, an update or a prompt injection. AirlockAI enforces limits at the network and container boundary, below any harness, so the same policy holds for every agent.
 
 ## Planned architecture
+
+Not built yet: the egress proxy that would log every outgoing connection of an agent (options A to G with pros and cons in
+[SPEC.md](SPEC.md) section 11.1), and a Notion tool.
 
 - Controller: local web UI and REST API, session manager, audit log (Python, FastAPI, SQLite).
 - Agent image: Claude Code in a locked-down container.
