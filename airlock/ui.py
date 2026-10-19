@@ -435,8 +435,11 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
         rows = "".join(
             f'<tr><td><input type=checkbox name=iid value="{e(i.id)}|{e(i.region)}" checked><td>{e(i.name or "-")}<td>{e(i.id)}'
             f'<td>{e(i.region)}<td>{e(i.state)}<td>{e(i.public_ip or i.private_ip or "-")}<td>{e(i.matched_on)}</tr>' for i in found)
-        body = (f'<form method=post action=/aws/add><table><tr><th><th>Name<th>Instance<th>Region<th>State<th>IP<th>Matched tag</tr>{rows}</table>'
-                '<p><button>Add selected nodes</button></p></form>')
+        body = (f'<form method=post action=/aws/add><table><tr><th><input type=checkbox id=iall checked title="Select / unselect all"><th>Name<th>Instance<th>Region<th>State<th>IP<th>Matched tag</tr>{rows}</table>'
+                '<p><button>Add selected nodes</button></p></form>'
+                "<script>const all=document.getElementById('iall'),boxes=()=>document.querySelectorAll('input[name=iid]');"
+                "all.onchange=()=>boxes().forEach(c=>c.checked=all.checked);"
+                "boxes().forEach(c=>c.onchange=()=>{all.checked=[...boxes()].every(x=>x.checked)});</script>")
         return AWS_PAGE.format(error=e(error), user=e(user), body=body, hint="")
 
     @app.post("/aws/add")
