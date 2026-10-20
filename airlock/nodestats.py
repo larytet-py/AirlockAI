@@ -5,6 +5,9 @@ import ipaddress
 import socket
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from . import nodeaccess, runner
@@ -50,7 +53,40 @@ def resolve_ip(host: str) -> str | None:
 LOGIN_HINT = "login is missing: enter the node login (user name and password) in Settings, or export USER_NAME and USER_PASSWORD"
 
 
+def web_up(url: str, timeout: float = 6) -> bool:
+    """The web UI answers: any reply below 500 after redirects (a login page or 401/403 counts as up)."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+            return r.status < 500
+    except urllib.error.HTTPError as e:
+        return e.code < 500
+    except (OSError, ValueError):
+        return False
+
+
+def ssh_banner_up(url: str, timeout: float = 6) -> bool:
+    """An ssh server answers on the link's host and port: it sends its "SSH-" banner, so a login or password prompt follows."""
+    try:
+        p = urllib.parse.urlsplit(url)
+        with socket.create_connection((p.hostname, p.port or 22), timeout=timeout) as s:
+            s.settimeout(timeout)
+            return s.recv(64).startswith(b"SSH-")
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def probe(node: Node, timeout: float = 12) -> dict:
+    res = ssh_probe(node, timeout)
+    url = node.links.get("web")
+    if url and url.startswith(("http://", "https://")):
+        res["web_up"] = web_up(url)
+    url = node.links.get("ssh")
+    if url and url.startswith("ssh://"):
+        res["ssh_link_up"] = ssh_banner_up(url)
+    return res
+
+
+def ssh_probe(node: Node, timeout: float) -> dict:
     ex0 = node.ssh_exec()
     ip = resolve_ip(ex0.host)  # shown even when the node is down
     base = {"ip": ip, "host": ex0.host, "port": ex0.port}

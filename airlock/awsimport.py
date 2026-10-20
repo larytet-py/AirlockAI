@@ -129,6 +129,15 @@ def host_for(inst: Instance, cfg: Config) -> str:
     return ip
 
 
+def expand_host(host: str, cfg: Config) -> str:
+    """A bare instance id typed as a node's host becomes host_template's DNS name; anything else is kept."""
+    from .config import INSTANCE_RE
+    tpl, h = settings(cfg).get("host_template"), host.strip()
+    if tpl and INSTANCE_RE.fullmatch(h):
+        return tpl.format(instance_id=h, name=h, region="")
+    return host
+
+
 def to_spec(inst: Instance, cfg: Config, taken: set[str]) -> dict:
     from .config import node_spec
     spec = node_spec(node_name(inst, taken), host_for(inst, cfg), user="${USER_NAME}", mode="ssh")

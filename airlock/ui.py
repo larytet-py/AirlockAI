@@ -74,6 +74,8 @@ async function ntick(){{try{{
   for(const [name,s] of Object.entries(d)){{
     const row=document.querySelector(`tr[data-node="${{name}}"]`);if(!row)continue;
     const q=k=>row.querySelector(`[data-n=${{k}}]`);
+    const w=row.querySelector('a[data-link=web]');if(w&&'web_up' in s){{w.className=s.web_up?'up':'down';w.title=s.web_up?'web UI is up':'web UI is down'}}
+    const h=row.querySelector('a[data-link=ssh]');if(h&&'ssh_link_up' in s){{h.className=s.ssh_link_up?'up':'down';h.title=s.ssh_link_up?'ssh server answers':'ssh refuses to connect'}}
     q('dot').className='chip '+(s.up?'up':'down');q('dot').textContent=s.up?'\u25cf up':(s.login_missing?'\u25cf down: login is missing':'\u25cf down');q('dot').title=s.error||'';
     q('ip').innerHTML='<span class=lbl>IP</span> '+(s.ip||'unresolved');q('ip').title=s.host+':'+s.port;
     const ld=q('load'),dk=q('disk');dk.innerHTML='';
@@ -218,10 +220,10 @@ def make_app(config_path=None) -> FastAPI:
         for n in cfg.nodes:
             opts = "".join(f"<option{' selected' if m == n.exec.mode else ''}>{m}" for m in ("ssh", "ssh_sudo", "direct"))
             mode = f'<form method=post action="/nodes/{e(n.name)}/mode"><select name=mode onchange="this.form.submit()">{opts}</select></form>'
-            links = [f'<a href="{e(u)}" target=_blank rel=noopener>{e(k)}</a>' for k, u in n.links.items()]
+            links = [f'<a href="{e(u)}" target=_blank rel=noopener data-link="{e(k)}">{e(k)}</a>' for k, u in n.links.items()]
             if "ssh" not in n.links:  # no ssh template configured: fall back to the node's own address
                 user = n.exec.user if n.exec.user and "$" not in n.exec.user else ""
-                links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}">ssh</a>')
+                links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}" data-link=ssh>ssh</a>')
             iid = n.resolved_instance_id()
             own = n.notes if n.notes and not n.notes.startswith("imported from AWS:") else ""   # drop the old auto-generated import note
             note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, n.created_by and f"created by {n.created_by}", own) if x)
@@ -404,7 +406,8 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
     def node_add(name: str = Form(...), host: str = Form(...), port: int = Form(22), user: str = Form(""),
                  mode: str = Form("ssh")):
         def go():
-            add_node(config_path, node_spec(name, host, port=port, user=user, mode=mode))
+            h = awsimport.expand_host(host, load_config(config_path))
+            add_node(config_path, node_spec(name, h, port=port, user=user, mode=mode))
             nodeaccess.provision_async([n for n in load_config(config_path).nodes if n.name == name.strip()])
         return back(go)
 
