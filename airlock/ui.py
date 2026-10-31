@@ -290,7 +290,7 @@ is visible to the agent, and folders that overlap credential directories (<code>
 <p style="margin-top:.6rem"><button type=button id=pup>&uarr; Up</button> <button type=button id=pok>Select this folder</button>
 <button type=button id=pcancel>Cancel</button></p></dialog>
 <script>
-function pickFolder(){
+function pickFolder(start){
   const dlg=document.getElementById('picker'),list=document.getElementById('plist'),cur=document.querySelector('#pcur code'),
         err=document.getElementById('perr'),up=document.getElementById('pup');
   let at='~',parent=null;
@@ -304,9 +304,9 @@ function pickFolder(){
       b.textContent=k.name+(k.git?'  (git)':'');b.onclick=()=>go(k.path);list.append(b)}
   }
   up.onclick=()=>parent&&go(parent);
-  document.getElementById('pok').onclick=()=>{document.getElementById('srcpath').value=at;dlg.close()};
+  document.getElementById('pok').onclick=()=>{const i=document.getElementById('srcpath');i.value=at;dlg.close();i.focus()};
   document.getElementById('pcancel').onclick=()=>dlg.close();
-  const typed=document.getElementById('srcpath').value.trim();
+  const typed=(start||document.getElementById('srcpath').value).trim();
   go(typed||'~').then(()=>{if(err.textContent&&typed)go('~')});
   dlg.showModal();
 }
@@ -326,7 +326,7 @@ function pickFolder(){
         for src in sources.load(node or None):
             p = e(src.path)
             miss = "" if src.exists else ' <span class=down>(folder not found, skipped)</span>'
-            rows += (f'<tr><td><code>{p}</code>{miss}<td>{"/src/" + e(src.mount_name) if src.exists else "-"}'
+            rows += (f'<tr><td><a href=# title="browse from this folder" onclick="pickFolder(this.textContent);return false"><code>{p}</code></a>{miss}<td>{"/src/" + e(src.mount_name) if src.exists else "-"}'
                      f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=mode><input type=hidden name=path value="{p}">'
                      f'<select name=mode onchange="this.form.submit()"><option value=ro {"selected" if src.mode == "ro" else ""}>read-only'
                      f'<option value=rw {"selected" if src.mode == "rw" else ""}>read-write (EC2)</select></form>'

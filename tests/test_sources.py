@@ -159,3 +159,11 @@ def test_worktree_mounts_its_git_directory(home, tmp_path, monkeypatch):
     assert [m["container"] for m in sources.mounts(sandbox=False)][1:] == [str(main / ".git")] and sources.mounts(False)[1]["ro"]
     # inside a container the worktree resolves through that mount: simulate with the same absolute path
     assert subprocess.run(["git", "-C", str(wt), "log", "-1", "--format=%s"], capture_output=True, text=True).stdout.strip() == "i"
+
+
+def test_folder_column_links_open_the_picker(home, tmp_path):
+    p = tmp_path / "a.yaml"
+    p.write_text("version: 1\nnodes:\n  - {name: n1, host: 10.0.0.1}\n")
+    c = TestClient(ui.make_app(str(p)), base_url="http://127.0.0.1:8800", follow_redirects=True)
+    c.post("/settings/sources", data={"node": "n1", "action": "add", "path": "~/myapp", "mode": "ro"})
+    assert 'onclick="pickFolder(this.textContent)' in c.get("/nodes/n1/sources").text
