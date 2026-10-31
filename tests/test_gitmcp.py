@@ -116,3 +116,13 @@ def test_pins_only_writable_git_folders(repo, tmp_path):
     ms = [{"host": str(w), "container": "/src/app", "ro": False}, {"host": str(w), "container": "/src/ro", "ro": True},
           {"host": str(plain), "container": "/src/plain", "ro": False}]
     assert list(gitmcp.pins(ms)) == ["app"]
+
+
+def test_agent_gitconfig_is_valid_git_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "host"))
+    sh("git", "config", "--global", "user.name", 'Ann "Q" Lee')
+    sh("git", "config", "--global", "user.email", "ann@x.org")
+    f = tmp_path / "agent.cfg"
+    f.write_text(gitmcp.agent_gitconfig())
+    out = sh("git", "config", "-f", str(f), "--list")
+    assert 'user.name=Ann "Q" Lee' in out and "user.email=ann@x.org" in out and "safe.directory=*" in out

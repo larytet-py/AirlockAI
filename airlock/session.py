@@ -331,6 +331,9 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
         env = {"HTTPS_PROXY": PROXY, "HTTP_PROXY": PROXY, "https_proxy": PROXY, "http_proxy": PROXY,
                "NO_PROXY": "egress", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "HOME": "/home/agent", "AIRLOCK_SESSION": sid,
                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}   # classic renderer: normal terminal selection and copy
+        (d / "gitconfig").write_text(gitmcp.agent_gitconfig())
+        (d / "gitconfig").chmod(0o644)
+        env["GIT_CONFIG_GLOBAL"] = "/airlock/gitconfig"
         if gtoken:
             env["MCP_URL"] = f"http://egress:{gitmcp.PORT_RELAY}/mcp/"
         args = ["run", "-d", "--name", ag, "--network", internal, "--user", f"{os.getuid()}:{os.getgid()}",

@@ -67,6 +67,16 @@ def check_layout(path: str) -> None:
             raise ValueError(f"repository config key {key!r} is not allowed")
 
 
+def agent_gitconfig() -> str:
+    """Global git config for the agent container: your own identity if set on this host, `safe.directory` so folders owned by
+    another uid are not refused. Repository config still wins over it."""
+    def get(k):
+        return subprocess.run(["git", "config", "--global", k], capture_output=True, text=True).stdout.strip()
+    name, email = get("user.name") or "Airlock Agent", get("user.email") or "airlock-agent@localhost"
+    q = lambda v: '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
+    return f"[safe]\n\tdirectory = *\n[user]\n\tname = {q(name)}\n\temail = {q(email)}\n"
+
+
 def pin(path: str) -> str | None:
     """`origin`'s URL if `path` is a plain git repository with one (read on the host before the agent runs), else None."""
     try:

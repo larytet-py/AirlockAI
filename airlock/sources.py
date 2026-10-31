@@ -199,6 +199,9 @@ def instructions(ms: list[dict]) -> str:
         return ""
     lines = ["", "## Source code", "", "Source folders of this machine are mounted in the container:"]
     lines += [f"- `{m['container']}` ({'read-only' if m['ro'] else 'read-write'})" for m in ms]
+    if any((Path(m["host"]) / ".git").exists() for m in ms):
+        lines += ["", "Folders with a `.git` directory keep their full git history: use `git log`, `git diff`, `git blame` and so on directly. "
+                  "In a read-write folder you can also commit locally."]
     return "\n".join(lines) + "\n"
 
 

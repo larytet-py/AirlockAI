@@ -41,7 +41,7 @@ PROFILE = r"""
 if [ -r /proc/1/environ ]; then
   while IFS= read -r -d '' kv; do
     case "$kv" in
-      HTTP_PROXY=*|HTTPS_PROXY=*|http_proxy=*|https_proxy=*|NO_PROXY=*|MCP_URL=*|MCP_TOKEN=*|CLAUDE_CODE_*|AIRLOCK_*) export "$kv";;
+      HTTP_PROXY=*|HTTPS_PROXY=*|http_proxy=*|https_proxy=*|NO_PROXY=*|MCP_URL=*|MCP_TOKEN=*|GIT_CONFIG_GLOBAL=*|CLAUDE_CODE_*|AIRLOCK_*) export "$kv";;
     esac
   done < /proc/1/environ
 fi
