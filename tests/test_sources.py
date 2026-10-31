@@ -125,3 +125,18 @@ def test_source_changes_are_audited(home, tmp_path):
     c.post("/settings/sources", data={"action": "add", "path": "~/.ssh"})                   # refused: not logged
     rows = [json.loads(ln)["payload"] for ln in Audit("settings").path.read_text().splitlines()]
     assert rows == [{"node": "n1", "action": "add", "path": "~/proj", "mode": "rw"}]
+
+
+def test_folder_picker_lists_only_visible_folders_inside_home(home, tmp_path):
+    (home / "proj" / ".git").mkdir()
+    p = tmp_path / "a.yaml"
+    p.write_text("version: 1\nnodes:\n  - {name: n1, host: 10.0.0.1}\n")
+    c = TestClient(ui.make_app(str(p)), base_url="http://127.0.0.1:8800")
+    top = c.get("/fs/dirs", params={"path": "~"}).json()
+    assert top["parent"] is None and [d["name"] for d in top["dirs"]] == ["myapp", "mylib", "proj"]   # no .ssh / .aws
+    assert next(d for d in top["dirs"] if d["name"] == "proj")["git"] is True
+    sub = c.get("/fs/dirs", params={"path": "~/proj"}).json()
+    assert sub["parent"] == "~" and sub["dirs"] == [{"name": "nested", "path": "~/proj/nested", "git": False}]
+    for bad in ("~/.ssh", "~/.aws/x", "/etc", "~/nope", "~/../.."):
+        assert c.get("/fs/dirs", params={"path": bad}).status_code == 400
+    assert "Browse" in c.get("/nodes/n1/sources").text and "Browse" in c.get("/settings").text

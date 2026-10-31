@@ -200,3 +200,23 @@ def instructions(ms: list[dict]) -> str:
     lines = ["", "## Source code", "", "Source folders of this machine are mounted in the container:"]
     lines += [f"- `{m['container']}` ({'read-only' if m['ro'] else 'read-write'})" for m in ms]
     return "\n".join(lines) + "\n"
+
+
+def list_dirs(path: str = "~") -> dict:
+    """Sub-folders of `path` for the folder picker: only inside the home directory, no hidden folders (so no credential
+    folders), folder names only. Raises ConfigError for anything else."""
+    home = Path.home().resolve()
+    p = Path(os.path.expanduser(path.strip() or "~")).resolve()
+    if not p.is_dir():
+        raise ConfigError(f"{p} is not a folder")
+    if p != home and not p.is_relative_to(home):
+        raise ConfigError("browse inside your home directory (type other paths by hand)")
+    if any(part.startswith(".") for part in p.relative_to(home).parts):
+        raise ConfigError("hidden folders are not listed")
+    try:
+        kids = sorted((c for c in p.iterdir() if not c.name.startswith(".") and c.is_dir()), key=lambda c: c.name.lower())
+    except OSError as e:
+        raise ConfigError(f"cannot read {p}: {e.strerror}")
+    rel = lambda q: "~" if q == home else f"~/{q.relative_to(home)}"
+    return {"path": rel(p), "parent": None if p == home else rel(p.parent),
+            "dirs": [{"name": c.name, "path": rel(c), "git": (c / ".git").exists()} for c in kids]}

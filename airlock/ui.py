@@ -14,7 +14,7 @@ import termios
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import awsimport, nodeaccess, nodestats, session, sources, sshaccess
 from .audit import Audit
@@ -281,8 +281,43 @@ A session on several nodes mounts the folders of all of them. Each folder appear
 sessions only, PROD sessions always get read-only. Takes effect for sessions started after the change. Anything inside a mounted folder (a <code>.env</code> file, for example)
 is visible to the agent, and folders that overlap credential directories (<code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.kube</code>, ...) are refused.</p>
 <table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
-<form method=post action=/settings/sources class=add><input type=hidden name=action value=add><input name=path placeholder="~/myproject" size=36 required>
-<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form></main>"""
+<form method=post action=/settings/sources class=add><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required> <button type=button onclick="pickFolder()">Browse&hellip;</button>
+<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{picker}</main>"""
+
+    PICKER = """<dialog id=picker style="min-width:22rem;max-width:90vw"><b>Select a folder</b>
+<p id=pcur style="margin:.4rem 0"><code></code></p><p id=perr class=down></p>
+<div id=plist style="max-height:50vh;overflow:auto;border:1px solid #8884;border-radius:6px"></div>
+<p style="margin-top:.6rem"><button type=button id=pup>&uarr; Up</button> <button type=button id=pok>Select this folder</button>
+<button type=button id=pcancel>Cancel</button></p></dialog>
+<script>
+function pickFolder(){
+  const dlg=document.getElementById('picker'),list=document.getElementById('plist'),cur=document.querySelector('#pcur code'),
+        err=document.getElementById('perr'),up=document.getElementById('pup');
+  let at='~',parent=null;
+  async function go(path){
+    const r=await fetch('/fs/dirs?path='+encodeURIComponent(path));
+    const d=await r.json();
+    if(!r.ok){err.textContent=d.error||'cannot list';return}
+    err.textContent='';at=d.path;parent=d.parent;cur.textContent=at;up.disabled=!parent;list.replaceChildren();
+    if(!d.dirs.length){const m=document.createElement('div');m.className='lbl';m.style.padding='.4rem';m.textContent='no sub-folders';list.append(m)}
+    for(const k of d.dirs){const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #8882;padding:.35rem .5rem';
+      b.textContent=k.name+(k.git?'  (git)':'');b.onclick=()=>go(k.path);list.append(b)}
+  }
+  up.onclick=()=>parent&&go(parent);
+  document.getElementById('pok').onclick=()=>{document.getElementById('srcpath').value=at;dlg.close()};
+  document.getElementById('pcancel').onclick=()=>dlg.close();
+  const typed=document.getElementById('srcpath').value.trim();
+  go(typed||'~').then(()=>{if(err.textContent&&typed)go('~')});
+  dlg.showModal();
+}
+</script>"""
+
+    @app.get("/fs/dirs")
+    def fs_dirs(path: str = "~"):
+        try:
+            return sources.list_dirs(path)
+        except ConfigError as ex:
+            return JSONResponse({"error": str(ex)}, status_code=400)
 
     def src_rows(node: str = "") -> str:
         """Folder table rows (Settings tab: the default list; a node page: that node's list)."""
@@ -309,8 +344,8 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
 <p class=lbl>AI sessions on this node mount these folders as <code>/src/&lt;folder name&gt;</code> (a session on several nodes mounts the folders of all of them).
 {state} Takes effect for sessions started after the change.</p>
 <table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
-<form method=post action=/settings/sources class=add><input type=hidden name=node value="{name}"><input type=hidden name=action value=add><input name=path placeholder="~/myproject" size=36 required>
-<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{reset}</main>"""
+<form method=post action=/settings/sources class=add><input type=hidden name=node value="{name}"><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required> <button type=button onclick="pickFolder()">Browse&hellip;</button>
+<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{reset}{picker}</main>"""
 
     @app.get("/nodes/{name}/sources", response_class=HTMLResponse)
     def node_sources(name: str, error: str = ""):
@@ -322,7 +357,7 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
         reset = ('<p><form method=post action=/settings/sources><input type=hidden name=node value="' + e(name) + '">'
                  '<input type=hidden name=action value=reset><button>Use the default list again</button></form></p>') if custom else ""
         return NODE_SRC.format(base_css=BASE_CSS, nav=nav_html("ec2"), error=e(error), name=e(name), state=state,
-                               src_rows=src_rows(name), reset=reset)
+                               src_rows=src_rows(name), reset=reset, picker=PICKER)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(error: str = ""):
@@ -347,7 +382,7 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
                          '<input type=password name=password autocomplete=off required size=30 placeholder="password (also the sudo password)">'
                          '<button>Keep in memory</button></form>')
         rows = src_rows()
-        return SETTINGS.format(base_css=BASE_CSS, nav=nav_html("settings"), error=e(error), auth_box=auth_box, login_box=login_box, src_rows=rows)
+        return SETTINGS.format(base_css=BASE_CSS, nav=nav_html("settings"), error=e(error), auth_box=auth_box, login_box=login_box, src_rows=rows, picker=PICKER)
 
     @app.post("/settings/sources")
     def settings_sources(action: str = Form(...), path: str = Form(""), mode: str = Form("ro"), node: str = Form("")):
