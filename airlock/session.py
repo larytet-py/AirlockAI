@@ -1,6 +1,7 @@
 """Sandbox sessions (SPEC 4 Mode 1): per-session key, egress allowlist, agent container, mandatory cleanup."""
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import nodeaccess, sources, sshaccess
+from . import gitmcp, nodeaccess, sources, sshaccess
 from .audit import Audit
 from .config import HOME, Config, ConfigError, Node, claude_oauth_token, redact, resolve
 from .runner import KNOWN_HOSTS
@@ -31,6 +32,8 @@ CLAUDE_CMD = ["bash", "-c",
               'cd /src 2>/dev/null || cd /workspace; '
               'if [ -f /workspace/.mcp.json ]; then exec claude --mcp-config /workspace/.mcp.json '
               '--append-system-prompt "$(cat /workspace/AIRLOCK_ENV.md 2>/dev/null)" "$@"; '
+              'elif [ -f /workspace/.mcp-git.json ]; then exec claude --mcp-config /workspace/.mcp-git.json '
+              '--append-system-prompt "$(cat /workspace/AIRLOCK_NODES.md)" "$@"; '
               'elif [ -f /workspace/AIRLOCK_NODES.md ]; then exec claude --append-system-prompt "$(cat /workspace/AIRLOCK_NODES.md)" "$@"; fi; '
               'exec claude "$@"',
               "claude", "--dangerously-skip-permissions"]
@@ -192,7 +195,8 @@ def write_session_files(st: dict, nodes: list[Node], ips: dict[str, str]) -> Non
     (d / "known_hosts").write_text("\n".join(kh) + "\n")
     (d / "nodes.json").write_text(json.dumps([{"name": n.name, "mode": n.exec.mode} for n in nodes]))
     ws = Path(st["workspace"])
-    (ws / "AIRLOCK_NODES.md").write_text(instructions(nodes) + sources.instructions(st.get("sources", [])))
+    git = (st.get("gitmcp") or {}).get("repos")
+    (ws / "AIRLOCK_NODES.md").write_text(instructions(nodes) + sources.instructions(st.get("sources", [])) + (gitmcp.instructions(git) if git else ""))
     claude_md = ws / "CLAUDE.md"
     if not claude_md.exists():
         claude_md.write_text("Read AIRLOCK_NODES.md first: it lists the nodes of this session and how to run commands on them.\n")
@@ -305,9 +309,21 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
         network_create(internal, internal=True)
         network_create(outbound)
         st["networks"] = [internal, outbound]
+        # git MCP (SPEC 6.4): on the host, reached through a relay port of the egress container, only for writable git folders
+        gtoken, relay = None, []
+        repos = gitmcp.pins(st["sources"])
+        if repos:
+            gip = docker("network", "inspect", "-f", "{{range .IPAM.Config}}{{.Gateway}} {{end}}", outbound).stdout.split()[0]
+            gtoken = secrets.token_urlsafe(32)
+            st["gitmcp"] = {**gitmcp.start(sid, repos, hashlib.sha256(gtoken.encode()).hexdigest(), gip, d), "repos": repos}
+            save_state(st)
+            relay = ["-e", f"RELAY={gitmcp.PORT_RELAY}={gip}:{st['gitmcp']['port']}"]
+            (ws / ".mcp-git.json").write_text(json.dumps({"mcpServers": {"airlock-git": {
+                "type": "http", "url": "${MCP_URL}", "headers": {"Authorization": "Bearer ${MCP_TOKEN}"}}}}, indent=2))
+            write_session_files(st, nodes, ips)
         eg = f"air-egress-{sid}"
         docker("run", "-d", "--name", eg, "--network", outbound, "--user", "65534:65534", "--read-only",
-               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-e", f"ALLOW={','.join(allow)}",
+               "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-e", f"ALLOW={','.join(allow)}", *relay,
                "-v", f"{PROXY_SRC}:/egress_proxy.py:ro", EGRESS_IMAGE, "python", "/egress_proxy.py")
         st["containers"].append(eg)
         docker("network", "connect", "--alias", "egress", internal, eg)
@@ -315,14 +331,17 @@ def start_session(cfg: Config, node_names: list[str], *, model_login: bool = Tru
         env = {"HTTPS_PROXY": PROXY, "HTTP_PROXY": PROXY, "https_proxy": PROXY, "http_proxy": PROXY,
                "NO_PROXY": "egress", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "HOME": "/home/agent", "AIRLOCK_SESSION": sid,
                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}   # classic renderer: normal terminal selection and copy
+        if gtoken:
+            env["MCP_URL"] = f"http://egress:{gitmcp.PORT_RELAY}/mcp/"
         args = ["run", "-d", "--name", ag, "--network", internal, "--user", f"{os.getuid()}:{os.getgid()}",
-                "--read-only", "--tmpfs", "/tmp", "--tmpfs", f"/home/agent:uid={os.getuid()},gid={os.getgid()}",
+                *(["-e", "MCP_TOKEN"] if gtoken else []), "--read-only", "--tmpfs", "/tmp", "--tmpfs", f"/home/agent:uid={os.getuid()},gid={os.getgid()}",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
                 "-v", f"{d}:/airlock:ro", "-v", f"{ws}:/workspace", *sources.docker_args(st["sources"])]
         token = model_login_args(args, d, audit, model_login)
         for k, v in env.items():
             args += ["-e", f"{k}={v}"]
-        docker(*args, image, "sleep", "infinity", env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token} if token else None)
+        docker(*args, image, "sleep", "infinity", env={**os.environ, **({"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}),
+                                                         **({"MCP_TOKEN": gtoken} if gtoken else {})})
         st["containers"].append(ag)
         finish_model_login(ag, d, token)
         st["ssh"] = sshaccess.provision(sid)
@@ -345,6 +364,7 @@ def stop_session(cfg: Config, sid: str) -> dict:
     audit = Audit(sid)
     st["status"] = "stopping"
     save_state(st)
+    gitmcp.stop((st.get("gitmcp") or {}).get("pid"))
     for c in st.get("containers", []):
         docker("rm", "-f", c, check=False)
     for n in st.get("networks", []):
@@ -399,6 +419,7 @@ def discard_session(sid: str) -> list[dict]:
         raise ConfigError(f"session {sid} is {st['status']}: stop it first")
     left = st.get("needs_cleanup") or [{"node": n, "error": "not verified"} for n in st.get("nodes", [])
                                        if st["status"] != "stopped"]
+    gitmcp.stop((st.get("gitmcp") or {}).get("pid"))
     for c in st.get("containers", []):
         docker("rm", "-f", c, check=False)
     for n in st.get("networks", []):

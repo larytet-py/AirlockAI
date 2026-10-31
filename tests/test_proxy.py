@@ -36,3 +36,23 @@ def test_allowlist(monkeypatch):
         w.write(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
         assert b"403" in await r.readuntil(b"\r\n\r\n")
     asyncio.run(run())
+
+
+def test_relay_forwards_to_fixed_target(monkeypatch):
+    async def run():
+        async def echo(r, w):
+            w.write(await r.read(10))
+            await w.drain()
+            w.close()
+        srv = await asyncio.start_server(echo, "127.0.0.1", 0)
+        port = srv.sockets[0].getsockname()[1]
+        monkeypatch.setenv("ALLOW", "example.com:443")
+        proxy = importlib.import_module("airlock.egress_proxy")
+        importlib.reload(proxy)
+        relay = await asyncio.start_server(proxy.relay_handler("127.0.0.1", port), "127.0.0.1", 0)
+        r, w = await asyncio.open_connection("127.0.0.1", relay.sockets[0].getsockname()[1])
+        w.write(b"ping")
+        assert await asyncio.wait_for(r.read(10), 3) == b"ping"
+        monkeypatch.setenv("RELAY", "8766=10.0.0.1:99")
+        assert proxy.relays() == {8766: ("10.0.0.1", 99)}
+    asyncio.run(run())

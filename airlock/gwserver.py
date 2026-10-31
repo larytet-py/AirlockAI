@@ -29,8 +29,9 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def build_mcp(gw: Gateway) -> Server:
-    server = Server("airlock-gateway", instructions=(
+def build_mcp(gw: Gateway, instructions: str | None = None, name: str = "airlock-gateway") -> Server:
+    """`gw` is anything with list_tools(), call(name, args) and audit; `instructions` replaces the gateway's own text."""
+    server = Server(name, instructions=instructions or (
         f"Environment {gw.env.name}. You can only use these tools: there is no shell, ssh or kubectl. Call query.list first to see "
         "which SQL, Elasticsearch and Redis queries are accepted. Anything that matches no pattern is rejected; to answer a request "
         "nothing covers, submit the queries (and any route they need) with proposal.submit and wait with proposal.status. "
@@ -51,8 +52,8 @@ def build_mcp(gw: Gateway) -> Server:
     return server
 
 
-def make_app(gw: Gateway, token_sha256: str) -> Starlette:
-    manager = StreamableHTTPSessionManager(app=build_mcp(gw), json_response=True, stateless=True,
+def make_app(gw: Gateway, token_sha256: str, instructions: str | None = None, name: str = "airlock-gateway") -> Starlette:
+    manager = StreamableHTTPSessionManager(app=build_mcp(gw, instructions, name), json_response=True, stateless=True,
                                            security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
     class Guarded:

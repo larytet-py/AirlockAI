@@ -51,6 +51,8 @@ export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1   # `claude` started over ssh uses
 # the UI: the container is the boundary, not permission prompts.
 if [ -f /workspace/.mcp.json ]; then
   claude() { command claude --dangerously-skip-permissions --mcp-config /workspace/.mcp.json --append-system-prompt "$(cat /workspace/AIRLOCK_ENV.md 2>/dev/null)" "$@"; }
+elif [ -f /workspace/.mcp-git.json ]; then   # sandbox session with the git MCP
+  claude() { command claude --dangerously-skip-permissions --mcp-config /workspace/.mcp-git.json --append-system-prompt "$(cat /workspace/AIRLOCK_NODES.md)" "$@"; }
 elif [ -f /workspace/AIRLOCK_NODES.md ]; then   # sandbox session: the node list and how to reach them
   claude() { command claude --dangerously-skip-permissions --append-system-prompt "$(cat /workspace/AIRLOCK_NODES.md)" "$@"; }
 else

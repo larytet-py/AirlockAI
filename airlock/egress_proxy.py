@@ -80,11 +80,34 @@ async def handle(cr, cw):
             pass
 
 
+def relays():
+    """RELAY="8766=172.20.0.1:41234": plain TCP forward of one listening port to one fixed address (the host's git MCP)."""
+    out = {}
+    for item in filter(None, os.environ.get("RELAY", "").split(",")):
+        lp, _, target = item.partition("=")
+        host, _, port = target.rpartition(":")
+        out[int(lp)] = (host, int(port))
+    return out
+
+
+def relay_handler(host, port):
+    async def h(cr, cw):
+        try:
+            ur, uw = await asyncio.wait_for(asyncio.open_connection(host, port), 15)
+        except Exception as e:
+            log("RELAY FAIL", host, port, e)
+            cw.close()
+            return
+        await asyncio.gather(pipe(cr, uw), pipe(ur, cw))
+    return h
+
+
 async def main():
     srv = await asyncio.start_server(handle, "0.0.0.0", 3128)
-    log("egress proxy up; allow =", sorted(ALLOW))
+    rel = [await asyncio.start_server(relay_handler(h, p), "0.0.0.0", lp) for lp, (h, p) in relays().items()]
+    log("egress proxy up; allow =", sorted(ALLOW), "relay =", relays())
     async with srv:
-        await srv.serve_forever()
+        await asyncio.gather(srv.serve_forever(), *(r.serve_forever() for r in rel))
 
 
 if __name__ == "__main__":
