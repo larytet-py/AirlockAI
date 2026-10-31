@@ -184,7 +184,35 @@ def mounts(sandbox: bool, nodes: list[str] | None = None) -> list[dict]:
         used.add(name)
         ro = not (sandbox and s.mode == "rw")
         out.append({"host": str(s.resolved), "container": f"/src/{name}", "ro": ro, "path": s.path})
-    return out
+    return out + _git_dir_mounts(out)
+
+
+def _git_dir_mounts(ms: list[dict]) -> list[dict]:
+    """A worktree or submodule folder has a `.git` *file* naming a git directory outside the folder (an absolute host path).
+    Mount that directory at the same path, so git works inside the container; read-write only where the folder is."""
+    extra: dict[str, dict] = {}
+    for m in ms:
+        g = Path(m["host"]) / ".git"
+        if g.is_symlink() or not g.is_file():
+            continue
+        try:
+            line = g.read_text().splitlines()[0]
+            gd = Path(line.removeprefix("gitdir:").strip()).resolve() if line.startswith("gitdir:") else None
+            if gd is None or not gd.is_dir():
+                continue
+            cd = gd / "commondir"
+            top = (gd / cd.read_text().strip()).resolve() if cd.is_file() else gd   # worktree: the main .git; submodule: its own dir
+        except (OSError, IndexError, ValueError):
+            continue
+        # never a credential directory (or a parent of one), and not already inside a mounted folder
+        if any(top == (Path.home() / n).resolve() or top.is_relative_to((Path.home() / n).resolve()) for n in SENSITIVE):
+            continue
+        if any(top.is_relative_to(Path(o["host"])) for o in ms):
+            continue
+        cur = extra.get(str(top))
+        extra[str(top)] = {"host": str(top), "container": str(top), "ro": m["ro"] and (cur or {"ro": True})["ro"],
+                           "path": str(top), "extra": True}
+    return list(extra.values())
 
 
 def docker_args(ms: list[dict]) -> list[str]:
@@ -198,6 +226,7 @@ def instructions(ms: list[dict]) -> str:
     if not ms:
         return ""
     lines = ["", "## Source code", "", "Source folders of this machine are mounted in the container:"]
+    ms = [m for m in ms if not m.get("extra")]   # git directories mounted for worktrees are plumbing, not source folders
     lines += [f"- `{m['container']}` ({'read-only' if m['ro'] else 'read-write'})" for m in ms]
     if any((Path(m["host"]) / ".git").exists() for m in ms):
         lines += ["", "Folders with a `.git` directory keep their full git history: use `git log`, `git diff`, `git blame` and so on directly. "

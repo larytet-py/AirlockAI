@@ -140,3 +140,22 @@ def test_folder_picker_lists_only_visible_folders_inside_home(home, tmp_path):
     for bad in ("~/.ssh", "~/.aws/x", "/etc", "~/nope", "~/../.."):
         assert c.get("/fs/dirs", params={"path": bad}).status_code == 400
     assert "Browse" in c.get("/nodes/n1/sources").text and "Browse" in c.get("/settings").text
+
+
+def test_worktree_mounts_its_git_directory(home, tmp_path, monkeypatch):
+    import subprocess
+    main = home / "mainrepo"
+    wt = home / "feat"
+    for a in (["init", "-q", "-b", "main", str(main)], ):
+        subprocess.run(["git", *a], check=True)
+    subprocess.run(["git", "-C", str(main), "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "i"], check=True)
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], check=True)
+    monkeypatch.setattr(sources, "DEFAULTS", [{"path": "~/feat", "mode": "rw", "enabled": True}])
+    ms = sources.mounts(sandbox=True)
+    assert [m["container"] for m in ms] == ["/src/feat", str(main / ".git")]
+    assert ms[1]["extra"] and not ms[1]["ro"]
+    assert "-v" in sources.docker_args(ms) and f"{main / '.git'}:{main / '.git'}" in sources.docker_args(ms)
+    assert str(main) not in sources.instructions(ms)                       # plumbing is not listed as a source folder
+    assert [m["container"] for m in sources.mounts(sandbox=False)][1:] == [str(main / ".git")] and sources.mounts(False)[1]["ro"]
+    # inside a container the worktree resolves through that mount: simulate with the same absolute path
+    assert subprocess.run(["git", "-C", str(wt), "log", "-1", "--format=%s"], capture_output=True, text=True).stdout.strip() == "i"

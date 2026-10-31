@@ -91,7 +91,7 @@ def pins(sources: list[dict]) -> dict[str, dict]:
     """{mount name: {path, url}} for the writable source folders that are git repositories with an origin."""
     out = {}
     for m in sources:
-        if m["ro"]:
+        if m["ro"] or m.get("extra"):
             continue
         url = pin(m["host"])
         if url:
