@@ -1,0 +1,20 @@
+# Publish docs/ (the static UI mock in docs/mock) to the gh-pages branch, which GitHub Pages serves.
+name: pages
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push docs/ to gh-pages
+        run: |
+          git config user.name github-actions && git config user.email github-actions@users.noreply.github.com
+          cp -r docs /tmp/site && touch /tmp/site/.nojekyll
+          git checkout --orphan gh-pages && git rm -rqf . && cp -r /tmp/site/. . && rm -f mock/build.py
+          git add -A && git commit -qm "Publish docs from ${GITHUB_SHA}" && git push -f origin gh-pages

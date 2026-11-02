@@ -1,0 +1,39 @@
+<!doctype html><meta charset=utf-8><title>AirlockAI - Access</title><style>:root{color-scheme:light dark}nav{position:sticky;top:0;align-self:flex-start;height:100vh;box-sizing:border-box;width:9rem;flex:none;padding:1rem .6rem;
+border-right:1px solid #8884;display:flex;flex-direction:column;gap:.4rem}.brand{font-weight:700;margin-bottom:.6rem}
+nav .tab{display:flex;justify-content:space-between;align-items:center;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;
+border:1px solid #8884;font-weight:600}nav .tab.on{background:#2a6df4;color:#fff;border-color:#2a6df4}nav .tab.prod.on{background:#c2410c;border-color:#c2410c}
+nav .tab.prod{border-left:4px solid #c2410c}nav .tab.ec2{border-left:4px solid #2a6df4}.badge{font-size:.75rem;background:#8883;border-radius:9px;padding:0 .45rem}
+nav .tab.on .badge{background:#fff3}.badge.wait{background:#c2410c;color:#fff}.waitlink{text-decoration:none;margin:-.2rem 0 .2rem .4rem}nav small{color:#888;margin-top:auto}body{display:flex}main{flex:1;min-width:0;padding:1rem 2rem}
+.tag{font-size:.75rem;padding:0 .4rem;border:1px solid #8886;border-radius:4px;color:#888}pre.json{white-space:pre-wrap;margin:0}.cmd{cursor:copy;font-size:.8rem;background:#8882;padding:0 .3rem;border-radius:3px;display:inline-block;margin-top:.2rem}[hidden]{display:none!important}body{font:14px system-ui;margin:0}.scroll{max-height:24rem;overflow-y:auto;border:1px solid #8884;border-radius:6px}.scroll table th{position:sticky;top:0;background:Canvas}
+.ed{cursor:text;border-bottom:1px dotted #888;white-space:pre-wrap}.ed:hover{background:#8882}.edf textarea{width:100%}
+.prop{border:1px solid #c2410c66;border-radius:6px;margin:.5rem 0;padding:.3rem .6rem}.ok{color:#2a9d4a}.no{color:#d33}
+.bulk{margin:.4rem 0;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}.subnav a,.subnav b{margin-right:1rem}
+.ktabs a{padding:.3rem .8rem;border:1px solid #8884;border-radius:6px 6px 0 0;text-decoration:none;color:inherit}.ktabs a.on{background:#8883;font-weight:600}
+td.num{text-align:right;white-space:nowrap}.grp td{background:#8881;font-weight:600}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #8884;padding:.35rem;text-align:left;vertical-align:top}.lbl{color:#888}.err{color:#d33}.err:empty{display:none}form{display:inline}</style>
+<nav><div class=brand>AirlockAI</div><a class="tab ec2" href="index.html">EC2 <span class=badge title="running sessions">1</span></a><a class="tab prod" href="prod.html">PROD <span class=badge title="running sessions">1</span></a><a class=waitlink href="prod.html#waiting"><span class="badge wait" title="waiting for your approval">2 waiting</span></a><a class="tab on" href="settings.html">Settings</a><small></small></nav><main><p class=err></p><p class=subnav><a href=settings.html>General</a><b>Access</b></p>
+<h2>Approved access <small class=lbl>(routes and query patterns, per environment; new ones arrive as proposals in the PROD tab)</small></h2>
+<p class=ktabs><a class="" href="access-postgres.html">Postgres</a><a class="" href="access-elasticsearch.html">Elasticsearch</a><a class="" href="access-redis.html">Redis</a><a class="on" href="access-files.html">Files</a></p>
+<form method=get class=bulk><input type=hidden name=kind value="files"><input name=q value="" placeholder="search name, description, query" size=32>
+<select name=env><option value="">all environments<option>staging<option>production</select>
+<select name=enabled><option value="">enabled and disabled<option value=on >enabled<option value=off >disabled</select>
+<select name=sort><option value=name selected>sort: name<option value=last_used >sort: last used<option value=calls >sort: calls</select>
+<button>Filter</button> <span class=lbl>0 pattern(s), 0 route(s)</span></form>
+<form id=abulk method=post action=/prod/patterns/bulk class=bulk><input type=hidden name=to value="/settings/access?kind=files&amp;q=&amp;env=&amp;enabled=&amp;sort=name&amp;page=1"><b>Selected:</b>
+<select name=action><option value=disable>Disable<option value=enable>Enable<option value=remove>Remove<option value=export>Export YAML
+<option value=propose>Propose for environment...</select><select name=env><option>staging<option>production</select>
+<button onclick="return this.form.action.value!=='remove'||confirm('Remove the selected items? History stays in the audit log.')">Apply</button></form>
+<table><tr><th><input type=checkbox onchange="selAll(this,'sel')"><th>Name<th>Environments<th>Query<th>Approved<th>Calls<th>7 days<th>First used<th>Last used<th>Errors<th>p50<th>max<th>Rows p50</tr><tr><td colspan=13><span class=lbl>Nothing here yet.</span></tr></table>
+<p></p>
+<details><summary>Import YAML</summary><form method=post action=/settings/access/import class=add><textarea name=yaml rows=6 cols=90
+placeholder="query_patterns:\n  - name: ..."></textarea><br><button>Import</button></form></details>
+</main><style>body{padding-bottom:2.2rem}</style><div id=mockbar style="position:fixed;bottom:0;left:0;right:0;z-index:99;background:#2a6df4;color:#fff;font:13px system-ui;padding:.35rem 1rem;text-align:center">Static mock of the AirlockAI UI with fictional data: buttons and forms do nothing. <a style="color:#fff" href="https://github.com/larytet-py/AirlockAI">Back to the README</a></div><script src="fragments.js"></script><script src="mock.js"></script><script>
+function rn(el){const w=el.closest('.nmwrap'),f=w.querySelector('form'),i=f.querySelector('input');el.hidden=true;f.hidden=false;i.focus();i.select()}
+function rnCancel(i){const w=i.closest('.nmwrap');i.value=i.dataset.orig;w.querySelector('form').hidden=true;w.querySelector('.nm').hidden=false}
+function rnKey(ev,i){if(ev.key==='Escape'){ev.preventDefault();rnCancel(i)}else if(ev.key==='Enter'){ev.preventDefault();
+  if(i.value.trim()===i.dataset.orig){rnCancel(i);return}i.onblur=null;if(i.form.reportValidity())i.form.requestSubmit();else i.onblur=()=>rnCancel(i)}}
+function ed(el){const w=el.closest('.edwrap'),f=w.querySelector('form');el.hidden=true;f.hidden=false;f.querySelector('textarea').focus()}
+function edKey(ev,t){const w=t.closest('.edwrap');if(ev.key==='Escape'){ev.preventDefault();t.form.reset();t.form.hidden=true;w.querySelector('.ed').hidden=false}
+  else if(ev.key==='Enter'&&(ev.ctrlKey||ev.metaKey)){ev.preventDefault();t.form.requestSubmit()}}
+function selAll(box,name){box.closest('form,div').querySelectorAll(`input[name="${name}"]`).forEach(c=>c.checked=box.checked)}
+function selProp(box){box.closest('.prop').querySelectorAll('input[name=item]').forEach(c=>c.checked=box.checked)}
+</script>

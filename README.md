@@ -6,6 +6,10 @@ The agent works inside an airlock: a container or microVM with a tightly control
 
 Status: Mode 1 (Sandbox) and Mode 2 (Gateway) are implemented; see [SPEC.md](SPEC.md) for the design and the list of known gaps.
 
+**[Try the UI mock](https://larytet-py.github.io/AirlockAI/mock/)**: a static copy of the web UI (EC2 and PROD tabs, approvals, settings, audit
+log) with fictional data, so you can click around before installing anything. It is rebuilt from the real UI with
+`uv run python docs/mock/build.py`.
+
 ## Getting started (Mode 1, step by step)
 
 ### 1. Prerequisites
