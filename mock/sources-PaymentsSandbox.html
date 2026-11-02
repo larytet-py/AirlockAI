@@ -1,0 +1,42 @@
+<!doctype html><meta charset=utf-8><title>AirlockAI - PaymentsSandbox sources</title><style>:root{color-scheme:light dark}nav{position:sticky;top:0;align-self:flex-start;height:100vh;box-sizing:border-box;width:9rem;flex:none;padding:1rem .6rem;
+border-right:1px solid #8884;display:flex;flex-direction:column;gap:.4rem}.brand{font-weight:700;margin-bottom:.6rem}
+nav .tab{display:flex;justify-content:space-between;align-items:center;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;
+border:1px solid #8884;font-weight:600}nav .tab.on{background:#2a6df4;color:#fff;border-color:#2a6df4}nav .tab.prod.on{background:#c2410c;border-color:#c2410c}
+nav .tab.prod{border-left:4px solid #c2410c}nav .tab.ec2{border-left:4px solid #2a6df4}.badge{font-size:.75rem;background:#8883;border-radius:9px;padding:0 .45rem}
+nav .tab.on .badge{background:#fff3}.badge.wait{background:#c2410c;color:#fff}.waitlink{text-decoration:none;margin:-.2rem 0 .2rem .4rem}nav small{color:#888;margin-top:auto}body{display:flex}main{flex:1;min-width:0;padding:1rem 2rem}
+.tag{font-size:.75rem;padding:0 .4rem;border:1px solid #8886;border-radius:4px;color:#888}pre.json{white-space:pre-wrap;margin:0}.cmd{cursor:copy;font-size:.8rem;background:#8882;padding:0 .3rem;border-radius:3px;display:inline-block;margin-top:.2rem}body{font:14px system-ui;margin:0}
+table{border-collapse:collapse}td,th{border-bottom:1px solid #8884;padding:.4rem;text-align:left}
+.up{color:#2a9d4a}.down{color:#d33}.lbl{color:#888}.err{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}.err:empty{display:none}
+form{display:inline}.add input{margin:.2rem}code{background:#8882;padding:0 .25rem;border-radius:3px}</style>
+<nav><div class=brand>AirlockAI</div><a class="tab ec2 on" href="index.html">EC2 <span class=badge title="running sessions">1</span></a><a class="tab prod" href="prod.html">PROD <span class=badge title="running sessions">1</span></a><a class=waitlink href="prod.html#waiting"><span class="badge wait" title="waiting for your approval">2 waiting</span></a><a class="tab" href="settings.html">Settings</a><small>Mode 1: sandbox</small></nav><main><p class=err></p><p><a href=index.html>&larr; EC2 nodes</a></p><h2>Source code mounted for node PaymentsSandbox</h2>
+<p class=lbl>AI sessions on this node mount these folders as <code>/src/&lt;folder name&gt;</code> (a session on several nodes mounts the folders of all of them).
+This node uses the <a href=settings.html>default list</a>; changing it here gives the node its own copy. Takes effect for sessions started after the change.</p>
+<table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr><tr><td><a href=# title="browse from this folder" onclick="pickFolder(this.textContent);return false"><code>~/src/shop-api</code></a><td>/src/shop-api<td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=mode><input type=hidden name=path value="~/src/shop-api"><select name=mode onchange="this.form.submit()"><option value=ro selected>read-only<option value=rw >read-write (EC2)</select></form><td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=toggle><input type=hidden name=path value="~/src/shop-api"><input type=checkbox checked onchange="this.form.submit()"></form><td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=remove><input type=hidden name=path value="~/src/shop-api"><button>Remove</button></form></tr><tr><td><a href=# title="browse from this folder" onclick="pickFolder(this.textContent);return false"><code>~/src/infra</code></a><td>/src/infra<td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=mode><input type=hidden name=path value="~/src/infra"><select name=mode onchange="this.form.submit()"><option value=ro selected>read-only<option value=rw >read-write (EC2)</select></form><td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=toggle><input type=hidden name=path value="~/src/infra"><input type=checkbox checked onchange="this.form.submit()"></form><td><form method=post action=/settings/sources><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=remove><input type=hidden name=path value="~/src/infra"><button>Remove</button></form></tr></table>
+<form method=post action=/settings/sources class=add><input type=hidden name=node value="PaymentsSandbox"><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required> <button type=button onclick="pickFolder()">Browse&hellip;</button>
+<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form><dialog id=picker style="min-width:22rem;max-width:90vw"><b>Select a folder</b>
+<p id=pcur style="margin:.4rem 0"><code></code></p><p id=perr class=down></p>
+<div id=plist style="max-height:50vh;overflow:auto;border:1px solid #8884;border-radius:6px"></div>
+<p style="margin-top:.6rem"><button type=button id=pup>&uarr; Up</button> <button type=button id=pok>Select this folder</button>
+<button type=button id=pcancel>Cancel</button></p></dialog>
+<style>body{padding-bottom:2.2rem}</style><div id=mockbar style="position:fixed;bottom:0;left:0;right:0;z-index:99;background:#2a6df4;color:#fff;font:13px system-ui;padding:.35rem 1rem;text-align:center">Static mock of the AirlockAI UI with fictional data: buttons and forms do nothing. <a style="color:#fff" href="https://github.com/larytet-py/AirlockAI">Back to the README</a></div><script src="fragments.js"></script><script src="mock.js"></script><script>
+function pickFolder(start){
+  const dlg=document.getElementById('picker'),list=document.getElementById('plist'),cur=document.querySelector('#pcur code'),
+        err=document.getElementById('perr'),up=document.getElementById('pup');
+  let at='~',parent=null;
+  async function go(path){
+    const r=await fetch('/fs/dirs?path='+encodeURIComponent(path));
+    const d=await r.json();
+    if(!r.ok){err.textContent=d.error||'cannot list';return}
+    err.textContent='';at=d.path;parent=d.parent;cur.textContent=at;up.disabled=!parent;list.replaceChildren();
+    if(!d.dirs.length){const m=document.createElement('div');m.className='lbl';m.style.padding='.4rem';m.textContent='no sub-folders';list.append(m)}
+    for(const k of d.dirs){const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #8882;padding:.35rem .5rem';
+      b.textContent=k.name+(k.git?'  (git)':'');b.onclick=()=>go(k.path);list.append(b)}
+  }
+  up.onclick=()=>parent&&go(parent);
+  document.getElementById('pok').onclick=()=>{const i=document.getElementById('srcpath');i.value=at;dlg.close();i.focus()};
+  document.getElementById('pcancel').onclick=()=>dlg.close();
+  const typed=(start||document.getElementById('srcpath').value).trim();
+  go(typed||'~').then(()=>{if(err.textContent&&typed)go('~')});
+  dlg.showModal();
+}
+</script></main>
