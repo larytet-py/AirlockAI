@@ -17,7 +17,7 @@ from . import runner
 from .config import HOME, Config, ConfigError, Node, Strict
 
 BUILTIN = Path(os.environ.get("AIRLOCK_BUILTIN_OPS") or Path(__file__).resolve().parent.parent / "operations")
-STR_RE = re.compile(r"^[A-Za-z0-9_.@:/=-]{1,128}$")
+STR_RE = re.compile(r"^[A-Za-z0-9_.@:/=][A-Za-z0-9_.@:/=-]{0,127}$")  # never starts with "-": a value must not become an option
 PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 
@@ -57,7 +57,7 @@ class Operation(Strict):
                 vals[p.name] = str(v)
             else:
                 if not STR_RE.match(str(raw)):
-                    raise ConfigError(f"{self.name}: {p.name} has characters outside [A-Za-z0-9_.@:/=-]")
+                    raise ConfigError(f"{self.name}: {p.name} has characters outside [A-Za-z0-9_.@:/=-] or starts with '-'")
                 vals[p.name] = str(raw)
         undeclared = set(PLACEHOLDER.findall(self.run)) - set(known)
         if undeclared:

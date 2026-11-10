@@ -146,22 +146,41 @@ def bind(c: KubeCommand, given: dict[str, Any]) -> list[str]:
     for a in c.argv:
         parts = split_literal(a)
         if len(parts) == 1 and parts[0][1] is not None:
-            v = vals[parts[0][0]]
+            n = parts[0][0]
+            v = vals[n]
+            for x in (v if isinstance(v, list) else [v]):
+                _refuse_flag_like(n, x, types[n], c.params.get(n))
             out += [str(x) for x in v] if isinstance(v, list) else [str(v)]
             continue
         piece = ""
-        for text, ty in parts:
+        for i, (text, ty) in enumerate(parts):
             if ty is None:
                 piece += text
                 continue
             v = vals[text]
+            if i == 0 and isinstance(v, str):
+                _refuse_flag_like(text, v, types[text], c.params.get(text))  # a value that opens the argument can turn it into a flag
             if isinstance(v, list) or (isinstance(v, str) and not SAFE_EMBED.match(v)):
                 raise Mismatch(f"{text}: unsafe value inside a larger argument")
             piece += str(v)
         out.append(piece)
     if any("\n" in a or "\0" in a for a in out):
         raise Mismatch("arguments with newline or NUL are rejected")
+    for a in out:  # the template was checked at load time; check again what the values produced
+        if a.split("=", 1)[0] in DENY_FLAGS:
+            raise Mismatch(f"argument {a.split('=', 1)[0]} is not allowed")
     return out
+
+
+def _refuse_flag_like(name: str, value: Any, type_: str, spec: ParamSpec | None) -> None:
+    """A string the agent supplies must never become a kubectl flag (`--as=...`, `--server=...`, `--kubeconfig=...`).
+    Values from a closed set the operator wrote (an enum or `values:`) are trusted; everything else may not start with `-`."""
+    if not isinstance(value, str) or not value.startswith("-"):
+        return
+    kind, _ = parse_type(type_)
+    if kind == "enum" or (spec is not None and spec.values is not None and value in spec.values):
+        return
+    raise Mismatch(f"{name}: a value cannot start with '-' (it would be read as a kubectl flag)")
 
 
 def json_schema(c: KubeCommand) -> dict:

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hmac
 import html
 import json
 import os
 import pty
 import re
+import secrets
 import signal
 import struct
 import termios
@@ -69,6 +71,8 @@ function rnKey(ev,i){{
     if(i.value.trim()===i.dataset.orig){{rnCancel(i);return}}   // unchanged: just close
     i.onblur=null;if(i.form.reportValidity())i.form.requestSubmit();else i.onblur=()=>rnCancel(i)}}
 }}
+// Text from a node is never markup: build elements and set textContent.
+function lbl(el,k,t){{el.textContent='';const s=document.createElement('span');s.className='lbl';s.textContent=k;el.append(s,' '+t)}}
 async function ntick(){{try{{
   const r=await fetch('/api/nodes/stats');if(!r.ok)return;const d=await r.json();
   for(const [name,s] of Object.entries(d)){{
@@ -77,13 +81,14 @@ async function ntick(){{try{{
     const w=row.querySelector('a[data-link=web]');if(w&&'web_up' in s){{w.className=s.web_up?'up':'down';w.title=s.web_up?'web UI is up':'web UI is down'}}
     const h=row.querySelector('a[data-link=ssh]');if(h&&'ssh_link_up' in s){{h.className=s.ssh_link_up?'up':'down';h.title=s.ssh_link_up?'ssh server answers':'ssh refuses to connect'}}
     q('dot').className='chip '+(s.up?'up':'down');q('dot').textContent=s.up?'\u25cf up':(s.login_missing?'\u25cf down: login is missing':'\u25cf down');q('dot').title=s.error||'';
-    q('ip').innerHTML='<span class=lbl>IP</span> '+(s.ip||'unresolved');q('ip').title=s.host+':'+s.port;
+    lbl(q('ip'),'IP',s.ip||'unresolved');q('ip').title=s.host+':'+s.port;
     const ld=q('load'),dk=q('disk');dk.innerHTML='';
-    if(!s.up){{ld.innerHTML='<span class=lbl>load</span> -';dk.innerHTML='<span class="chip lbl">storage -</span>';continue}}
-    ld.innerHTML='<span class=lbl>load</span> '+(s.load1==null?'-':s.load1.toFixed(2)+(s.cores?' / '+s.cores+' cores':''));
+    if(!s.up){{lbl(ld,'load','-');const sk=document.createElement('span');sk.className='chip lbl';sk.textContent='storage -';dk.appendChild(sk);continue}}
+    lbl(ld,'load',s.load1==null?'-':Number(s.load1).toFixed(2)+(s.cores?' / '+Number(s.cores)+' cores':''));
     ld.className='chip '+((s.load1!=null&&s.cores&&s.load1>s.cores)?'down':'');
     for(const k of s.disks){{const sp=document.createElement('span');sp.className='chip'+(parseInt(k.pct)>=85?' down':'');
-      sp.innerHTML=`<span class=lbl>${{k.mount}}</span> ${{k.pct}} (${{gb(k.used)}} / ${{gb(k.size)}})`;dk.appendChild(sp)}}
+      const m=document.createElement('span');m.className='lbl';m.textContent=k.mount;
+      sp.append(m,` ${{k.pct}} (${{gb(k.used)}} / ${{gb(k.size)}})`);dk.appendChild(sp)}}
   }}
 }}catch(e){{}}}}
 ntick();setInterval(ntick,30000);
@@ -189,22 +194,49 @@ addEventListener('resize',()=>{{fit.fit();ws.readyState==1&&ws.send(JSON.stringi
 </script>"""
 
 
-def make_app(config_path=None) -> FastAPI:
+UI_COOKIE = "airlock_ui"
+LOOPBACK_HOST = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+
+
+def make_app(config_path=None, ui_token: str | None = None) -> FastAPI:
+    """The controller UI. It has no user accounts, so every request must carry a random per-start token (cookie `airlock_ui`),
+    handed over once through the URL that `airlock ui` prints; the Host must be loopback (DNS rebinding) and state-changing
+    requests must come from this origin. `ui_token` is for tests; normally a fresh random value is made per start."""
     app = FastAPI(title="AirlockAI")
+    token = ui_token or secrets.token_urlsafe(32)
+    app.state.ui_token = token
     e = html.escape
     loopback = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
 
+    def has_token(value: str | None) -> bool:
+        return bool(value) and hmac.compare_digest(value.encode(), token.encode())
+
     @app.middleware("http")
-    async def refuse_cross_site_posts(request, call_next):
-        """The UI has no login, so a page on another site must not be able to submit its forms (start/delete sessions,
-        plant a token). Browsers always send Origin (or Sec-Fetch-Site) on a cross-site POST."""
+    async def guard(request, call_next):
+        from fastapi.responses import PlainTextResponse
+        if not LOOPBACK_HOST.match(request.headers.get("host", "")):
+            return PlainTextResponse("host not allowed", status_code=421)  # DNS rebinding: the page's origin is not ours
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
-            if (origin and origin != "null" and not loopback.match(origin)) or origin == "null" \
-                    or request.headers.get("sec-fetch-site") == "cross-site":
-                from fastapi.responses import PlainTextResponse
+            site = request.headers.get("sec-fetch-site")
+            if origin == "null" or (origin and not loopback.match(origin)) or site == "cross-site":
                 return PlainTextResponse("cross-site request refused", status_code=403)
-        return await call_next(request)
+            if not origin and site != "same-origin":
+                return PlainTextResponse("a state-changing request needs an Origin", status_code=403)
+        supplied = request.query_params.get("token")
+        if supplied and request.method == "GET" and has_token(supplied):
+            # First visit through the printed URL: keep the token in a cookie and drop it from the address bar and history.
+            resp = RedirectResponse(str(request.url.remove_query_params("token")), status_code=303)
+            resp.set_cookie(UI_COOKIE, token, httponly=True, samesite="strict", path="/")
+            return resp
+        if not has_token(request.cookies.get(UI_COOKIE)):
+            return PlainTextResponse("not signed in: open the URL that `airlock ui` printed (it carries a one-time token)", status_code=401)
+        resp = await call_next(request)
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
+        return resp
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, error: str = "", tab: str = "", info: str = ""):
@@ -626,9 +658,10 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
 
     @app.websocket("/sessions/{sid}/ws")
     async def term_ws(ws: WebSocket, sid: str, cmd: str = "shell"):
-        # No auth in v1, so refuse cross-site pages: the Origin must be this loopback server.
+        # The terminal is a shell in the agent's container: same token as the pages, a loopback Host, and this origin only.
         origin = ws.headers.get("origin", "")
-        if not re.match(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", origin):
+        if (not LOOPBACK_HOST.match(ws.headers.get("host", "")) or not loopback.match(origin)
+                or not has_token(ws.cookies.get(UI_COOKIE))):
             await ws.close(code=1008)
             return
         try:

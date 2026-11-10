@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -9,6 +10,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+MOUNT_RE = re.compile(r"^/[A-Za-z0-9_./-]{0,200}$")
+PCT_RE = re.compile(r"^\d{1,3}%$")
 
 from . import nodeaccess, runner
 from .config import ConfigError, Node
@@ -35,7 +39,10 @@ def parse(out: str) -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            disks.append({"mount": parts[5], "used": int(parts[2]) * 1024, "size": int(parts[1]) * 1024, "pct": parts[4]})
+            # The node is not trusted (an agent with sudo there controls these strings): only plain values reach the UI.
+            mount = parts[5] if MOUNT_RE.match(parts[5]) else "(unprintable mount name)"
+            pct = parts[4] if PCT_RE.match(parts[4]) else "-"
+            disks.append({"mount": mount, "used": int(parts[2]) * 1024, "size": int(parts[1]) * 1024, "pct": pct})
     return {"load1": load1, "cores": cores, "disks": disks}
 
 

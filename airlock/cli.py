@@ -419,7 +419,10 @@ def cmd_ui(a, cfg) -> int:
     elif state == "none" and not (Path.home() / ".claude" / ".credentials.json").exists() and sys.stdin.isatty():
         print("Claude is not signed in: no saved token and no login on this machine, so agent sessions would start unauthorized.")
         prompt_claude_token()
-    uvicorn.run(make_app(a.config), host="127.0.0.1", port=a.port, log_level="info")
+    app = make_app(a.config)
+    print(f"\nOpen the UI with this link (it carries a token that is new on every start; do not share it):\n"
+          f"  http://127.0.0.1:{a.port}/?token={app.state.ui_token}\n")
+    uvicorn.run(app, host="127.0.0.1", port=a.port, log_level="info")
     return 0
 
 
