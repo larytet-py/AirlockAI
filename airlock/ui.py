@@ -234,7 +234,7 @@ def make_app(config_path=None, ui_token: str | None = None) -> FastAPI:
         resp = await call_next(request)
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")  # not no-referrer: that makes browsers send Origin: null on our own form POSTs
         resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
         return resp
 

@@ -150,3 +150,9 @@ def test_operation_string_values_cannot_start_with_a_dash(bad):
     with pytest.raises(ConfigError):
         op.bind({"unit": bad})
     assert "nginx.service" in op.bind({"unit": "nginx.service"})
+
+
+def test_referrer_policy_lets_our_own_forms_send_their_origin(raw_ui, tmp_path, monkeypatch):
+    # With "no-referrer" browsers send `Origin: null` on same-origin form POSTs, which the gate refuses as cross-site.
+    c = client(tmp_path, monkeypatch, cookies={"airlock_ui": TOKEN})
+    assert c.get("/settings").headers["referrer-policy"] == "same-origin"
