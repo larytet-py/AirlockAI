@@ -185,6 +185,8 @@ AirlockAI has two modes with different trust models.
 
 ### Mode 1 - Sandbox: the agent is free, the world is small
 
+Git: a source folder mounted read-write that is a git repository gets the MCP tool `git.commit_push(repo, message)`. It runs on the host with your git credentials, commits with the agent's message and pushes the checked-out branch to the pinned `origin` (SPEC 6.4).
+
 For debugging your own test nodes on EC2 (typically 2-3 at a time).
 
 - The agent runs unrestricted (`claude --dangerously-skip-permissions`) inside a container or VM.
@@ -233,8 +235,6 @@ Everything (nodes, operations, environments, query patterns, execution modes) li
 
 Permission modes, hooks and CLAUDE.md are part of the agent harness and can be bypassed by a bug, an update or a prompt injection. AirlockAI enforces limits at the network and container boundary, below any harness, so the same policy holds for every agent.
 
-## Planned architecture
-
 ## Related tools
 
 Tools that complement AirlockAI (it isolates the agent; these check what goes in, what comes out, or run inside the box).
@@ -264,6 +264,8 @@ Ideas this suggests (not planned or decided):
 - Canary secrets: plant a fake credential in the agent's environment and alert in the audit chain if it appears in any egress or tool argument.
 - Run a security-audit skill as a first-class session template, with the "no external network, scratch-only writes" controls taken from the session.
 
+## Planned architecture
+
 Not built yet: the egress proxy that would log every outgoing connection of an agent (options A to G with pros and cons in
 [SPEC.md](SPEC.md) section 11.1), and a Notion tool.
 
@@ -274,3 +276,7 @@ Not built yet: the egress proxy that would log every outgoing connection of an a
 - Tool SDK: add a read-only tool as a short Python function with a declared risk level; hot reload, no agent restart.
 
 Details, threat model, data model and milestones are in [SPEC.md](SPEC.md).
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).

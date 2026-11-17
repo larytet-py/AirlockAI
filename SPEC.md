@@ -262,6 +262,20 @@ nodes:
     exec: {mode: ssh_sudo}
 ```
 
+### 6.4 Git MCP: commit and push from the sandbox (Mode 1)
+
+The agent has no git credentials. When a session mounts a source folder read-write (Settings tab) and that folder is a plain git repository with an `origin`, the controller starts a small MCP server on the host (`airlock/gitmcp.py`) with a per-session bearer token. The agent reaches it through a relay port of its egress container (`http://egress:8766/mcp/`); `MCP_URL` and `MCP_TOKEN` are the only things it holds.
+
+Tool: `git.commit_push(repo, message)`. No model is involved: the message is the agent's text, used as written (plus an `Airlock-Session:` trailer), and the decision is code. It runs `git add -A`, commits if anything changed, and pushes.
+
+Rules
+
+- Only the branch checked out in the folder is pushed, as `HEAD:refs/heads/<branch>`, never forced. A detached HEAD is refused.
+- `origin`'s URL is pinned when the session starts. The push goes to that URL whatever the repo's config says later.
+- The folder is agent-writable, so it is treated as hostile: `.git` must be a real directory (no gitfile, no symlink, no `commondir`); git runs with explicit `--git-dir` / `--work-tree`, hooks off; the repo config may hold only plain keys (no filters, aliases, ssh commands, url rewrites, includes), else the call is refused.
+- Read-only folders and folders that are not git repositories are not offered. Every call is audited (repo, remote, message, branch, commit).
+- Needs the host to accept connections from the egress container on the session's outbound Docker network.
+
 ## 7. Mode 2 detail: environments
 
 An environment bundles connectivity, tool servers and policy.
@@ -902,6 +916,21 @@ Constraints common to all options: the proxy cannot see commands run inside an s
 
 Known residual risks (to state in the README): bypass mode means anything inside the agent container is fair game; the model API sees whatever the agent sees; a malicious tool author (the user) is out of scope.
 
+### 11.2 The audit as a shareable artifact: after an incident and in real time (not built)
+
+The audit is not only a private log for the operator. It is the record a team needs to answer "what did the agent do, to what, and who allowed it", so it has to leave the machine in a form others can read and trust. Two uses:
+
+- **After an incident (post-hoc).** One session's audit is exported as a self-contained bundle and given to a reviewer, a security team or a ticket: `airlock audit export <session>` writes a directory or archive with the session's JSONL, the chain head hash, the manifest (session id, environment, nodes and EC2 ids, start and end, operator, git SHA of the config, approvals and who made them) and a rendered read-only HTML or Markdown timeline. A reviewer runs `airlock audit verify <bundle>` with no access to the original machine: it recomputes the hash chain and reports the first broken link, a missing tail, or an altered record. A chain proves the file is internally consistent, not that nothing was deleted from the end, so the bundle also carries the head hash, which can be pinned elsewhere (a ticket comment, a signed note, a Slack message) when the session closes.
+- **In real time (live).** While a session runs, others can follow it: a read-only live view in the UI (`/audit/<session>` already shows the log; it gains tailing), a stream (Server-Sent Events or a WebSocket, read-only) and an optional sink that forwards each record as it is written (Slack channel, webhook, Loki, syslog, SIEM; see section 12.1 item 5). The point of sharing live is that a second person can see a risky call and stop the session; stopping stays an action in the authenticated UI, never a message to the agent.
+
+Requirements:
+
+1. **Single writer, tamper-evident.** The controller remains the only writer of the chain (section 11). Export and sinks read from it; a sink failure never blocks or alters the chain, and a lost record is detected by a sequence number gap on the receiving side. Add a per-session monotonic `seq` and, optionally, periodic signed checkpoints (head hash plus `seq`, signed with a controller key) so a truncated tail is detectable even from the sink.
+2. **Redaction before sharing.** The audit already holds anonymized values and never secrets (section 7.6, 7.4). Exports and live streams add a second pass with a named policy: drop or hash query results and argument values, keep tool name, pattern@version, node, ec2, outcome, duration and counts. The default for anything leaving the machine is the metadata-only view; the full payload view needs an explicit, itself-audited choice. Because audit records can quote what the agent saw, treat a shared audit like production data: the same access rules apply.
+3. **Who sees what.** Live views and sinks are scoped per environment and per session, in line with the per-user permissions in section 12.1 item 4. Today the UI is loopback-only without login, so live sharing beyond the operator needs the authenticated UI first.
+4. **Same record, different views.** There is one record format (section 11); a timeline, a per-node view and a per-actor view are renderings of it, not separate logs. Records carry `node`, `ec2`, `actor` and, for shared sessions, the Slack or UI user (section 12.2), so the same artifact answers who asked, who approved and where it ran.
+5. **Retention.** Bundles and sinks are copies. Deleting a session in the UI does not delete exported bundles, and the operator is told where copies go. Retention of the original follows section 12.
+
 ## 12. Deployment, sharing and reuse
 
 - Shared hosting (after v1): the controller and containers can run on a shared Ubuntu EC2 with a controller instance per user; a provisioning tool (Ansible/AWX, Terraform) only sets up the host. Per-user isolation is a user per controller plus separate Docker networks.
@@ -928,6 +957,38 @@ The gateway is deployed by DevOps (Kubernetes manifests, Helm or Flux) and serve
 5. Deployment. Secrets come from Infisical or 1Password, not local files; configuration (environments, commands, query patterns) comes from git and reloads; the audit log is shipped to Loki; the gateway image and config are versioned and rolled back like any service.
 6. Reachability. Data stores that sit inside the cluster (Postgres poolers, Redis) are reached from inside it, so no port-forward is needed; stores outside it (Elasticsearch) by network policy.
 7. Database access without a read-only role: point the tool at the read-only pooler and set `require_replica: true`; the gateway then refuses any connection that is not a standby. A real read-only role is still recommended as defense in depth.
+
+### 12.2 Shared AI sessions, including talking to the agent from Slack (not built)
+
+Goal: more than one person talks to the same agent session at the same time, and a team can do it from a Slack channel or thread without opening a terminal. Today a session has one agent container; `session attach` and `ssh <session>` each start their own `claude` process, so two people get two separate conversations that share only the container's files.
+
+**Sharing models**
+
+| Model | How | Pros | Cons |
+|---|---|---|---|
+| A. Separate sessions, shared environment | each person starts their own session on the same environment (own agent, own conversation; gateway per session or one shared) | works now; clean attribution; no interleaved input | no shared context; duplicate work |
+| B. One conversation in a shared terminal | `claude` runs under `tmux` in the agent image; participants attach read-only or read-write | smallest change; everyone sees the same screen | input interleaves; attribution lost unless input is tagged; terminal access needs authentication |
+| C. One conversation behind a bridge | a service owns the agent's stdin/stdout (Claude Code non-interactive or SDK mode) and exposes it to a chat front end; the bridge serialises messages | real multi-user experience; identity per message | a new service; the bridge becomes a trusted component |
+
+Recommended order: B first (tmux in the agent image, attach modes in the UI), then C with Slack as its first front end. A remains the default for anything that mutates.
+
+**Slack front end (model C)**
+
+- A Slack app (Socket Mode, so no public inbound endpoint) runs next to the controller. A message in a bound channel or thread is forwarded to the session's agent; the agent's reply is posted back in the thread. One thread is one conversation; one channel is bound to one session and environment by an operator in the UI.
+- Identity: the Slack user id of the author travels with every message into the agent's prompt and into the audit (`actor` becomes the Slack user, not `ui`). A Slack user is mapped to an Airlock user in the controller configuration; unmapped users are ignored with a note in the thread.
+- Authorisation: who may talk to a session (channel membership is not enough: an explicit allow-list of Slack users or groups per session). Talking to the agent and approving its actions are different rights.
+- Approvals: mutating tool calls and proposals are not approved by a Slack message from the agent's own thread. The thread shows a link to the PROD tab (loopback today, SSO later, section 12.1), or an interactive Slack button restricted to the approver group, and never lets the requester approve when `approver != requester` is configured.
+- Data leaving: everything the agent writes into Slack is visible to the channel, and query results can contain sensitive data. Channels must be private to the allowed group; the gateway's anonymisation (section 7.6) applies before results reach the agent, and the bridge never posts raw tool output, only the agent's reply.
+- Inbound is untrusted text: messages are prompt-injection input like any other. They add no authority: the agent still has only the approved tools, and the sandbox or gateway boundary is unchanged.
+- The Slack token of the bridge is a different secret from the Slack read tool (section 7.5): separate app, separate scopes (`chat:write`, `app_mentions:read`, history of bound channels only), stored like other secrets, never mounted into the agent or gateway container.
+
+**Cross-cutting requirements**
+
+1. Per-message actor in the audit for all models (user id, channel, thread, message id) so "who asked for this call" is answerable.
+2. Concurrency: one agent turn at a time per session; messages that arrive during a turn are queued and shown as queued.
+3. Session lifetime: a shared session has an owner and an idle timeout; stopping it still removes node access (section 6.3).
+4. Authenticated UI and terminal before any model that lets someone other than the operator in (section 12.1, items 2 and 4).
+5. Hosting: the bridge needs a host that stays up, so it follows the shared deployment in section 12 (a controller per user or one shared controller).
 
 ## 13. Implementation plan
 
@@ -1022,6 +1083,8 @@ Decided
 
 Open
 - Traceability of outbound traffic and commands: which option or combination of section 11.1 to build first.
+- Shared sessions (section 12.2): tmux sharing first or go straight to the Slack bridge; whether approvals may ever happen in Slack or only in the authenticated UI; how a Slack user maps to an Airlock user.
+- Audit sharing (section 11.2): export format (directory, tar, or signed JSON), whether to sign checkpoints, which real-time sink comes first (live UI tail, Slack, webhook or Loki), and the default redaction level for anything that leaves the machine.
 
 ## 15. Naming
 
