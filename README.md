@@ -235,6 +235,35 @@ Permission modes, hooks and CLAUDE.md are part of the agent harness and can be b
 
 ## Planned architecture
 
+## Related tools
+
+Tools that complement AirlockAI (it isolates the agent; these check what goes in, what comes out, or run inside the box).
+Descriptions are from each project's README; none of them is integrated yet.
+
+| Tool | What it does | Fit with AirlockAI |
+|---|---|---|
+| [SkillSpector](https://github.com/NVIDIA/SkillSpector) (NVIDIA, Apache-2.0) | Static scan of an agent skill or MCP tool for prompt injection, exfiltration and supply-chain risk before install; `--no-llm` keeps content local; SARIF/JSON for CI | The agent image mounts your skills read-only (SPEC section 5). Scan them before mounting. Its README says it is not a sandbox, which is the gap AirlockAI fills |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Finds and verifies leaked credentials in code and git history | Run on the diff before `git.commit_push` pushes, and on tool output as a second redaction pass |
+| [Trivy](https://github.com/aquasecurity/trivy) | Scans container images, IaC and dependencies for known vulnerabilities | Scan the agent, egress and gateway images at build |
+| [Cloudflare security-audit-skill](https://github.com/cloudflare/security-audit-skill) (MIT) | Multi-phase audit skill; requires target code to run in an OS sandbox with no external network, or it does not execute it | A ready workload for Mode 1: its sandbox requirement is what an Airlock session provides |
+| [Strix](https://github.com/usestrix/strix) (Apache-2.0) | Autonomous pentest agents that run exploit code and browsers | Run it inside a Mode 1 session, never on the host. Its own isolation model is not documented in its README |
+| [PyRIT](https://github.com/microsoft/PyRIT) (Microsoft, MIT) | Red-teaming framework for generative AI systems, multi-turn attacks | Test the Slack/Jira/log paths for prompt injection (SPEC section 11 threat rows) |
+| [Codex Security](https://github.com/openai/codex-security) (OpenAI, Apache-2.0) | Finds, validates and patches vulnerabilities; runs stages in containers | Review gate for the agent's commits; its Compose and AppArmor files are a reference for confinement |
+| [Claude Code Security Review](https://github.com/anthropics/claude-code-security-review) | GitHub Action that reviews each PR for security issues | Review gate for commits the agent pushes |
+| [ClamAV](https://github.com/Cisco-Talos/clamav), [Semgrep](https://github.com/semgrep/semgrep) | Malware scan; code pattern scan | Minor: scan files the agent downloads, scan agent-written code |
+
+Not relevant to isolation: [Nuclei](https://github.com/projectdiscovery/nuclei) (scans live web apps) and
+[bla](https://github.com/qybaihe/bla) (hardens release artifacts against AI reverse engineering).
+
+Ideas this suggests (not planned or decided):
+
+- Skill vetting: scan the mounted skills and any MCP server config with SkillSpector when a session starts; refuse to start on DO_NOT_INSTALL.
+- Secret scan on the way out: TruffleHog over the staged diff in `git.commit_push` and over every tool result, next to `redact()`.
+- Image scan: Trivy in CI for the three images.
+- Injection regression suite: PyRIT or a small fixed corpus of poisoned Slack/Jira/log text, asserting that no mutating call happens without approval.
+- Canary secrets: plant a fake credential in the agent's environment and alert in the audit chain if it appears in any egress or tool argument.
+- Run a security-audit skill as a first-class session template, with the "no external network, scratch-only writes" controls taken from the session.
+
 Not built yet: the egress proxy that would log every outgoing connection of an agent (options A to G with pros and cons in
 [SPEC.md](SPEC.md) section 11.1), and a Notion tool.
 
