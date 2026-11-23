@@ -258,6 +258,7 @@ syncBars();
 </script>
 <script>
 const gb=b=>b>=2**30?(b/2**30).toFixed(1)+' GB':(b/2**20).toFixed(0)+' MB';
+const gbn=b=>{const g=b/2**30;return g>=10?g.toFixed(0):g.toFixed(1)};
 const f2=x=>x==null?'-':Number(x).toFixed(2);
 const BUSY={pending:'instance starting\u2026',stopping:'instance stopping\u2026',rebooting:'rebooting\u2026','shutting-down':'instance shutting down\u2026'};
 // Node rows from /api/nodes/stats. Text from a node is never markup: elements + textContent only.
@@ -282,7 +283,7 @@ async function ntick(){try{
     m.append(el('span',{class:hot?'hot':null,title:'/proc/loadavg: 1, 5 and 15 minute averages, running/total tasks'},'cpu ',
       el('b',{},f2(s.load1)+' '+f2(s.load5)+' '+f2(s.load15)+(s.tasks?'  '+s.tasks:'')),s.cores?' \u00b7 '+Number(s.cores)+' cores':''));
     if((s.disks||[]).length){const dk=el('span',{},'disk');
-      for(const k of s.disks){const x=el('span',{class:parseInt(k.pct)>=85?'hot':null},' '+k.mount+' ',el('b',{},k.pct),' ');
+      for(const [i,k] of s.disks.entries()){const x=el('span',{class:parseInt(k.pct)>=85?'hot':null},(i?' ·':'')+' '+k.mount+' ',el('b',{},gbn(k.used)+'/'+gbn(k.size)+' GB'),' ',el('b',{},k.pct),' ');
         x.title=k.mount+': '+gb(k.used)+' used of '+gb(k.size);dk.append(x)}m.append(dk)}
     ld.append(m)}
   syncBars()}catch(e){}}
