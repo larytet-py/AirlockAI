@@ -48,7 +48,7 @@ gateway container. Mutating tools are off unless you set <code>approve_writes</c
 <h2>AI sessions <span class=hint>{sess_hint}</span> {prune} <span id=stamp class=hint></span></h2>
 <form id=psbulk method=post hidden></form>
 <div class=tablewrap><table id=sess aria-label="PROD sessions" style="min-width:820px"><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=psess aria-label="Select all PROD sessions">
-<th>Session<th>Agent<th>MCP tool calls<th>Cluster<th style="text-align:right">Open &middot; remove</tr></thead><tbody>{sessions}</tbody></table></div>
+<th>Session<th>Agent<th>MCP tool calls<th>Cluster<th style="width:2.5rem"></tr></thead><tbody>{sessions}</tbody></table></div>
 <h2 id=patterns-h>Query patterns <small class=lbl>(recently approved; the only queries the agent can run)</small></h2>
 <div id=pwrap>{patterns}</div>
 {env_bar}{sess_bar}{kit}

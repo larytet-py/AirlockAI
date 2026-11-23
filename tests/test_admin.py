@@ -468,7 +468,7 @@ def test_session_table_columns_and_row_actions(cfgfile, tmp_path, monkeypatch):
     page = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800").get("/").text
     head = re.search(r'<table id=sess[^>]*><thead><tr>(.*?)</tr>', page, re.S).group(1)
     cols = [re.sub(r"<[^>]+>", "", c).strip() for c in head.split("<th")[1:]]
-    assert [c.split(">")[-1] for c in cols] == ["", "Session", "Agent", "CPU &middot; memory &middot; workspace", "Node", "Open &middot; remove"]
+    assert [c.split(">")[-1] for c in cols] == ["", "Session", "Agent", "CPU &middot; memory &middot; workspace", "Node", ""]   # no "Open · remove" column
     live = re.search(r'<tr data-kind=sess data-key="bbbbbb22".*?</tr>', page, re.S).group(0)
     assert "ssh -F " in live and "bbbbbb22</span>" in live and "claude &#x2197;" in live and 'data-arm="Stop &amp; remove?"' in live
     dead = re.search(r'<tr data-kind=sess data-key="cccccc33".*?</tr>', page, re.S).group(0)

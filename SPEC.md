@@ -819,11 +819,13 @@ One page, in this order:
    - Row menu: Start session (disabled while the node is down), Rename, Source folders…, exec mode (`ssh`, `ssh_sudo`, `direct`), Start / Reboot / Stop instance, Delete from list. There is no Start button and no exec select in the row.
    - Bar for ticked nodes: `Start session` (one separate session per ticked node that is up; `Start N sessions`), `Start instance`, `Reboot`, `Stop instance`, `Delete`. `Delete` first removes the sessions on those nodes that are not running, so a dead agent never pins a node; a node with a live session is refused.
 2. `+ Add node` (inline form) and `Import my AWS instances` (section 6.1).
-3. AI sessions (Sandbox only). Columns: checkbox, session (name or id, click to name it; the ssh command to copy while running), agent chip, CPU · memory · workspace, node, then `claude ↗`, `shell ↗` (new tab, xterm.js terminal over websocket to `docker exec` in the agent container), `✕` and `⋯`.
-   - Agent chip: `running`; `starting… 12s` (sessions start in the background and the row updates when the start finishes); `NOT RUNNING ✕ remove` (record says running, container gone); `cleanup pending ✕ remove`; `stopped ✕ remove`. Removing something that is not running is one click; `✕` on a running session asks by a second click.
+3. AI sessions (Sandbox only). Columns: checkbox, session (name or id, click to name it; while running, the ssh command to copy and `claude ↗`, `shell ↗` below it: new tab, xterm.js terminal over websocket to `docker exec` in the agent container), agent chip, CPU · memory · workspace, node, `⋯`.
+   - Agent chip: `running`; `starting… 12s` (sessions start in the background and the row updates when the start finishes); `NOT RUNNING ✕ remove` (record says running, container gone); `cleanup pending ✕ remove`; `stopped ✕ remove`. Removing something that is not running is one click on the chip.
+   - Row menu (`⋯`, right-click): Open claude, Open shell, Name this session, Stop only, Stop & remove (two clicks while running) or Remove. `Del` on the row cursor opens the menu on that item and presses it.
    - The heading shows `Remove N not running` only when N > 0. The bar for ticked sessions: `Stop & remove`, `Stop only`.
    - `Stop & remove` works from any state: it stops the session if needed (containers removed, key and sudo rule revoked on each node) and deletes the record. If a node cannot be reached, for example its EC2 instance is already stopped, the session is removed anyway and the banner lists each node where the key and sudo rule may remain; their expiry marker and `airlock sweep` clean them up later. "Not running" means stopped, stuck in cleanup, running with the agent container gone, or starting for more than 10 minutes; a start in progress is never touched.
    - A session started on several nodes from the CLI lists all its nodes in the Node column; the UI itself starts one session per node.
+   - Ticking a node, or clicking its row, lights up the session rows that use it (tinted, with an accent bar on the left). The same holds for clusters and PROD sessions.
 
 The Claude sign-in and the node login are in Settings (shared by both tabs).
 

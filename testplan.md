@@ -21,11 +21,11 @@ anywhere.
 
 | # | Setup | Action | Expected |
 |---|-------|--------|----------|
-| 1.1 | Session running on `A`, `A` reachable | Click `✕` at the end of the session row, then click it again | First click: the button turns red, "Stop & remove?". Second click: row gone, `air-agent-<id>` and `air-egress-<id>` gone from `docker ps`, no banner. On `A`: no `airlock` line for the id in `~/.ssh/authorized_keys`, no `/etc/sudoers.d/90-airlock-<id>`. |
-| 1.2 | Same as 1.1 | Click `✕` once and wait 3 s | The button reverts; the session keeps running. |
-| 1.3 | Session already stopped (`Stop only` earlier) | Click the grey `● stopped ✕ remove` chip (or `✕`) | One click: row gone. |
+| 1.1 | Session running on `A`, `A` reachable | Session row `⋯` → `Stop & remove`, then click it again | First click: the item turns red, "Stop & remove?". Second click: row gone, `air-agent-<id>` and `air-egress-<id>` gone from `docker ps`, no banner. On `A`: no `airlock` line for the id in `~/.ssh/authorized_keys`, no `/etc/sudoers.d/90-airlock-<id>`. |
+| 1.2 | Same as 1.1 | Click `Stop & remove` once and wait 3 s | The item reverts; the session keeps running. |
+| 1.3 | Session already stopped (`Stop only` earlier) | Click the grey `● stopped ✕ remove` chip | One click: row gone. |
 | 1.4 | Three sessions, two running, one stopped | Tick all three; the bar at the bottom shows "3 sessions"; click `Stop & remove` twice | First click: "Stop 2 running & remove?". Second: all three gone, no banner, the bar disappears. |
-| 1.5 | One session running | Put the row cursor on it (`j`), press `Del` twice | Same as 1.1. |
+| 1.5 | One session running | Put the row cursor on it (`j`), press `Del` twice | The menu opens on `Stop & remove`, armed; the second `Del` runs it. Same as 1.1. |
 
 ## 2. Agent already dead (the case that used to need several clicks)
 
@@ -33,10 +33,10 @@ anywhere.
 |---|-------|--------|----------|
 | 2.1 | Session running, then `docker rm -f air-agent-<id>` by hand | Wait 5 s | The agent chip turns into red `● NOT RUNNING ✕ remove`; `claude ↗`, `shell ↗` and the ssh line disappear; `Remove 1 not running` appears in the heading. |
 | 2.2 | As 2.1 | Click the chip | One click (nothing is running). Row gone; node `A` cleaned as in 1.1. |
-| 2.3 | Session running on `A`, then stop the EC2 instance of `A` (row `⋯` → `Stop instance`, two clicks) | Click `✕` on the session (one click once the chip shows NOT RUNNING) | Row gone. Red banner: "removed. Key and sudo rule may remain on: `<id>/A` (run airlock sweep once the node is reachable)". |
+| 2.3 | Session running on `A`, then stop the EC2 instance of `A` (row `⋯` → `Stop instance`, two clicks) | Click the session's `NOT RUNNING ✕ remove` chip | Row gone. Red banner: "removed. Key and sudo rule may remain on: `<id>/A` (run airlock sweep once the node is reachable)". |
 | 2.4 | As 2.3, then click `A`'s `● instance stopped ▶ start` chip and run `uv run airlock sweep` once it is up | | The leftover key line and sudoers file for `<id>` are removed on `A`. |
 | 2.5 | Session in `needs_cleanup` (do 2.3 with `⋯` → `Stop only` instead) | Click the red `● cleanup pending ✕ remove` chip | Stop is retried first. If `A` is back up: row gone, no banner. If `A` is still down: row gone, banner lists `<id>/A`. |
-| 2.6 | Kill the UI process while a session is starting (the row shows `starting… 12s`), restart the UI | | The row keeps `starting…`. Within the first 10 minutes `Remove N not running` does not count it; after 10 minutes it shows `NOT RUNNING ✕ remove` and is counted. `✕` removes it at any time. |
+| 2.6 | Kill the UI process while a session is starting (the row shows `starting… 12s`), restart the UI | | The row keeps `starting…`. Within the first 10 minutes `Remove N not running` does not count it; after 10 minutes it shows `NOT RUNNING ✕ remove` and is counted. `⋯` → `Remove` removes it at any time. |
 
 ## 3. Remove N not running
 
@@ -73,6 +73,7 @@ anywhere.
 | 5.11 | PROD, a context with an expired login | | Red status chip with the kubectl error and `↻ refresh`. Click: the login plugin runs on this machine (may open the browser), the chip turns green on the next poll. |
 | 5.12 | PROD, an agent asks for a write call | | A card with the call and its arguments: `Approve` (one click), `For this session`, `Reject` (two clicks). The agent gets the decision. |
 | 5.13 | Settings | Click the source folder's `read-only ⇄` chip; untick Enabled; click `✕` | Each saves at once: `read-write (EC2)`, disabled, removed. |
+| 5.14 | Sessions on `A` and on `B` | Tick `A`; then untick it and click an empty part of `B`'s row | `A`'s sessions are tinted with a blue bar on the left, the others are not; after the click only `B`'s sessions are. Same on PROD for a cluster and its sessions. |
 
 ## 6. Regression checks
 

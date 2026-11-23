@@ -36,7 +36,7 @@ PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=
 .lbl{{color:#888}}[hidden]{{display:none!important}}</style>
 {nav}<main><p class=err>{error}</p><p class=ok>{info}</p>
 <h1 style="font-size:1.05rem;margin:0 0 .3rem">EC2 &middot; Sandbox</h1>
-<div class=hint>Tick nodes to start sessions. Click a name to edit it, click an <code>ssh &hellip;</code> line to copy it, <kbd>&#x22ef;</kbd> or right-click for the rest. Press <kbd>?</kbd> for keys.</div>
+<div class=hint>Tick nodes to start sessions; a ticked or clicked node lights up its AI sessions. Click a name to edit it, click an <code>ssh &hellip;</code> line to copy it, <kbd>&#x22ef;</kbd> or right-click for the rest. Press <kbd>?</kbd> for keys.</div>
 <h2>Nodes <span class=hint>{node_hint}</span></h2>
 <form id=nbulk method=post hidden></form>
 <div class=tablewrap><table id=nodes aria-label=Nodes><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=nodes aria-label="Select all nodes">
@@ -51,7 +51,7 @@ onclick="const f=document.getElementById('addnode');f.hidden=!f.hidden;if(!f.hid
 <h2>AI sessions <span class=hint>{sess_hint}</span> {prune} <span id=stamp class=hint></span></h2>
 <form id=sbulk method=post hidden></form>
 <div class=tablewrap><table id=sess aria-label="AI sessions" style="min-width:820px"><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=sess aria-label="Select all sessions">
-<th>Session<th>Agent<th>CPU &middot; memory &middot; workspace<th>Node<th style="text-align:right">Open &middot; remove</tr></thead><tbody>{sessions}</tbody></table></div>
+<th>Session<th>Agent<th>CPU &middot; memory &middot; workspace<th>Node<th style="width:2.5rem"></tr></thead><tbody>{sessions}</tbody></table></div>
 {node_bar}{sess_bar}{kit}
 <script>
 const gb=b=>b>=2**30?(b/2**30).toFixed(1)+' GB':(b/2**20).toFixed(0)+' MB';
@@ -134,9 +134,6 @@ def session_row(s: dict, *, kind: str, form: str, rm: str, stop: str, metrics: s
         opens = (f'<a class=lnk data-liveonly data-claude href="/sessions/{e(sid)}/term?cmd=claude" target=_blank rel=noopener>claude &#x2197;</a>'
                  f'<a class=lnk data-liveonly href="/sessions/{e(sid)}/term" target=_blank rel=noopener>shell &#x2197;</a>')
     busy = status == "stopping" or (status == "starting" and not dead)
-    x = "" if busy else post_btn("✕", rm, "ssel", sid, cls="btn danger mini", arm="Stop & remove?" if live else "",
-                                 title="Stop the agent, revoke node access, remove" if live else "Remove from the list",
-                                 aria=f"Remove session {name or sid}", extra="data-rm")
     items = []
     if live:
         items += [mi_link("Open claude", f"/sessions/{sid}/term?cmd=claude", newtab=True, key="Enter", extra="data-show=live"),
@@ -145,12 +142,13 @@ def session_row(s: dict, *, kind: str, form: str, rm: str, stop: str, metrics: s
     if live:
         items.append(mi_post("Stop only", stop, "ssel", sid, show="live"))
     if not busy:
-        items.append(mi_post("Stop & remove" if live else "Remove", rm, "ssel", sid, arm="Stop & remove?" if live else "", danger=True, key="Del"))
+        items.append(mi_post("Stop & remove" if live else "Remove", rm, "ssel", sid, arm="Stop & remove?" if live else "", danger=True, key="Del",
+                             extra="data-rm"))
     return (f'<tr data-kind={kind} data-key="{e(sid)}" data-sid="{e(sid)}" data-life="{e(status)}" data-live=0 data-dead={1 if dead else 0} '
-            f'data-nodes="{e(",".join(s.get("nodes", [])))}" data-rmform=act data-rmaction="{e(rm)}">'
+            f'data-nodes="{e(",".join(s.get("nodes", [])))}" data-targets="{e(",".join(s.get("nodes", [])) or s.get("environment", ""))}" data-rmform=act data-rmaction="{e(rm)}">'
             f'<td><input type=checkbox class=rowsel name=ssel value="{e(sid)}" form={form} aria-label="Select session {e(name or sid)}">'
-            f'<td>{namecell}{sub}{pill}{err}<td data-f=agent>{agent}<td>{metrics if live else "<span class=hint>&ndash;</span>"}<td>{e(where)}{extra}'
-            f'<td><div class=acts>{opens}{x}{kebab(name or sid)}{menu(name or sid, items)}</div></tr>')
+            f'<td>{namecell}{sub}{pill}{f"<div class=opens>{opens}</div>" if opens else ""}{err}<td data-f=agent>{agent}<td>{metrics if live else "<span class=hint>&ndash;</span>"}<td>{e(where)}{extra}'
+            f'<td>{kebab(name or sid)}{menu(name or sid, items)}</tr>')
 
 
 def prune_button(action: str, dead: int) -> str:

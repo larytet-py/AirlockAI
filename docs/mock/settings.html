@@ -21,6 +21,7 @@ h2{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
 .tablewrap tbody tr:hover{background:var(--hover)}
 tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)!important}
 tr.cursor{outline:2px solid var(--accent);outline-offset:-2px}
+tr.linked{background:color-mix(in srgb,var(--accent) 16%,transparent)!important}tr.linked td:first-child{box-shadow:inset 4px 0 var(--accent)}
 .nm{font-weight:650;cursor:text;border-bottom:1px dotted var(--muted)}.nm:hover{background:var(--hover)}
 .sub{color:var(--muted);font:.78rem var(--mono)}.sub a{color:inherit}
 .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.1rem .55rem;border-radius:999px;background:var(--chipbg);font-size:.82rem;
@@ -50,7 +51,7 @@ input.rowsel,input.selall{width:1rem;height:1rem;cursor:pointer}
 border:1px solid transparent;border-radius:4px;padding:.05rem .4rem;cursor:copy;max-width:100%}
 .cmd .ct{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cmd:hover{border-color:var(--accent)}
 .cmd .ic{color:var(--muted);font-family:system-ui}.cmd.done{border-color:var(--ok);color:var(--ok)}
-.acts{display:flex;gap:.6rem;align-items:center;justify-content:flex-end}
+.acts{display:flex;gap:.6rem;align-items:center;justify-content:flex-end}.opens{display:flex;gap:.7rem;margin-top:.2rem}
 .menu{position:fixed;z-index:50;min-width:13rem;background:Canvas;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:.3rem;font-size:.88rem}
 .menu .hd{padding:.3rem .6rem .2rem;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
 .menu button,.menu a{display:flex;width:100%;box-sizing:border-box;justify-content:space-between;gap:1rem;padding:.38rem .6rem;border:0;background:none;
@@ -175,7 +176,13 @@ function syncBars(){
     for(const b of $$('button[data-need]',bar)){const n=t.filter(r=>fits(r,b.dataset.need)).length;b.disabled=!n;
       if(b.dataset.label1&&!b.classList.contains('armed'))b.textContent=n>1?b.dataset.labeln.replace('{n}',n):b.dataset.label1}
     for(const b of $$('button[data-arm-tpl]',bar)){const n=t.filter(r=>fits(r,b.dataset.armNeed||b.dataset.need)).length;
-      if(n&&!b.disabled)b.dataset.arm=b.dataset.armTpl.replace('{n}',n);else{disarm(b);delete b.dataset.arm}}}}
+      if(n&&!b.disabled)b.dataset.arm=b.dataset.armTpl.replace('{n}',n);else{disarm(b);delete b.dataset.arm}}}
+  linkRows()}
+// Ticked nodes (or clusters) and the row cursor light up the session rows that use them.
+const LINKS={nodes:'sess',env:'psess'};
+function linkRows(){for(const[from,to]of Object.entries(LINKS)){const keys=new Set(ticked(from).map(r=>r.dataset.key));
+  if(cursorRow&&cursorRow.dataset.kind===from)keys.add(cursorRow.dataset.key);
+  for(const r of rowsOf(to))r.classList.toggle('linked',(r.dataset.targets||'').split(',').some(k=>keys.has(k)))}}
 document.addEventListener('change',ev=>{const c=ev.target;
   if(c.classList.contains('rowsel')){if(c.checked)clearTicks(c.closest('tr').dataset.kind);syncBars()}
   else if(c.classList.contains('selall')){clearTicks(c.dataset.for);for(const r of rowsOf(c.dataset.for)){const x=r.querySelector('input.rowsel');if(x)x.checked=c.checked}syncBars()}});
@@ -212,7 +219,7 @@ addEventListener('scroll',()=>closeMenu(false),true);addEventListener('resize',(
 
 // P8: keyboard. Ignored while typing in a field.
 let cursorRow=null;
-function setCursor(r){if(cursorRow)cursorRow.classList.remove('cursor');cursorRow=r;if(r){r.classList.add('cursor');r.scrollIntoView({block:'nearest'})}}
+function setCursor(r){if(cursorRow)cursorRow.classList.remove('cursor');cursorRow=r;if(r){r.classList.add('cursor');r.scrollIntoView({block:'nearest'})}linkRows()}
 document.addEventListener('click',ev=>{const r=ev.target.closest('tr[data-kind]');if(r&&!ev.target.closest('button,a,input,form'))setCursor(r)});
 document.addEventListener('keydown',ev=>{
   if(ev.ctrlKey||ev.metaKey||ev.altKey)return;
@@ -221,6 +228,7 @@ document.addEventListener('keydown',ev=>{
     if(ev.key==='ArrowDown'){ev.preventDefault();(items[(i+1)%items.length]||items[0]).focus()}
     else if(ev.key==='ArrowUp'){ev.preventDefault();(items[(i-1+items.length)%items.length]||items[0]).focus()}
     else if(ev.key==='Escape'){ev.preventDefault();closeMenu(true)}
+    else if((ev.key==='Delete'||ev.key==='Backspace')&&document.activeElement.matches('[data-rm]')){ev.preventDefault();document.activeElement.click()}
     return}
   if($('#keys')&&$('#keys').open)return;
   if(ev.key==='Escape'){if($$('input.rowsel:checked').length){clearTicks();syncBars()}else setCursor(null);return}
@@ -236,7 +244,8 @@ document.addEventListener('keydown',ev=>{
   if(ev.key==='x'){const c=cursorRow.querySelector('input.rowsel');if(c){c.checked=!c.checked;c.dispatchEvent(new Event('change',{bubbles:true}))}return}
   if(ev.key==='m'){const k=cursorRow.querySelector('.kebab');if(k){const r=k.getBoundingClientRect();rowMenu(cursorRow,r.right-220,r.bottom+4,k)}return}
   if(ev.key==='Enter'&&ev.target===document.body){const a=cursorRow.querySelector('a[data-claude]');if(a){ev.preventDefault();a.click()}return}
-  if(ev.key==='Delete'||ev.key==='Backspace'){const b=cursorRow.querySelector('button[data-rm]');if(b){ev.preventDefault();b.click()}}});
+  if(ev.key==='Delete'||ev.key==='Backspace'){const b=cursorRow.querySelector('.menu [data-rm]'),k=cursorRow.querySelector('.kebab');
+    if(b&&k){ev.preventDefault();const r=k.getBoundingClientRect();rowMenu(cursorRow,r.right-220,r.bottom+4,k);b.focus();b.click()}}});
 
 // Reload the page (to show a session that left "starting", for example) only while nobody is in the middle of something.
 function idle(){const a=document.activeElement;
