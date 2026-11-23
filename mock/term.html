@@ -1,0 +1,30 @@
+<!doctype html><meta charset=utf-8><title>shell 3f2a91c4</title>
+<link rel=stylesheet href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>html,body{height:100%;margin:0;background:#000}#t{height:calc(100% - 1.4rem)}#h{height:1.4rem;font:12px system-ui;color:#888;padding:0 .5rem}</style>
+<div id=t></div><div id=h>Static mock: a recorded, fictional session. In the real UI this is a live terminal in the agent container.</div>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script>
+const term=new Terminal({cursorBlink:true,convertEol:true}),fit=new FitAddon.FitAddon();term.loadAddon(fit);
+term.open(document.getElementById('t'));fit.fit();addEventListener('resize',()=>fit.fit());
+const claude=new URLSearchParams(location.search).get('cmd')==='claude';
+document.title=(claude?'claude ':'shell ')+'3f2a91c4';
+const P='\x1b[32magent@checkout-bug\x1b[0m:\x1b[34m/workspace\x1b[0m$ ';
+const shell=[P+'cat AIRLOCK.md | head -6',
+'# AirlockAI session nodes','','You run in a sandbox. Only the model API and these nodes are reachable. ssh keys and passwordless',
+'sudo are already set up for this session; never ask for a password.','',
+'- JaneTestApi: airlock-run JaneTestApi -- <command>',
+P+'airlock-run JaneTestApi -- systemctl is-active checkout-api','active',
+P+'curl -sS https://example.com -o /dev/null','curl: (56) CONNECT tunnel failed, response 403   \x1b[33m# egress: not on the allowlist\x1b[0m',
+P+'ls /src','shop-api  shop-web',P];
+const cl=['\x1b[38;5;208m✻\x1b[0m Welcome to Claude Code','','  /workspace','',
+'\x1b[1m> Checkout returns 502 on JaneTestApi since this morning. Find out why.\x1b[0m','',
+'\x1b[38;5;208m●\x1b[0m Bash(airlock-run JaneTestApi -- journalctl -u checkout-api -n 50 --no-pager)',
+'  ⎿  ... upstream connect error: connection refused (payments:8443)',
+'\x1b[38;5;208m●\x1b[0m Bash(airlock-run JaneTestGateway -- sudo ss -ltnp | grep 8443)',
+'  ⎿  (no output)','',
+'\x1b[38;5;208m●\x1b[0m The payments listener on JaneTestGateway is not running: the 06:10 deploy left',
+'  /etc/payments/tls.key unreadable (mode 0600, owner root). Proposed fix in /src/shop-api/deploy/payments.yaml.','','> '];
+let i=0;const lines=claude?cl:shell;(function next(){if(i<lines.length){term.write(lines[i]+(i<lines.length-1?'\n':''));i++;setTimeout(next,i<2?50:350)}})();
+</script>
+<div id=mockbar style="position:fixed;bottom:0;left:0;right:0;z-index:99;background:#2a6df4;color:#fff;font:13px system-ui;padding:.35rem 1rem;text-align:center">Static mock of the AirlockAI UI with fictional data. <a style="color:#fff" href="index.html">Back to the mock</a></div>
