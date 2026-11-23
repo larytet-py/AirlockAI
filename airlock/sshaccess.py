@@ -8,6 +8,7 @@ machine can reach it. Authentication is a controller-wide key (~/.airlock/ssh/id
 from __future__ import annotations
 
 import os
+import threading
 import re
 import shlex
 import subprocess
@@ -111,7 +112,7 @@ def render_config(sessions: list[dict]) -> str:
 def write_config(sessions: list[dict] | None = None) -> Path:
     from .session import list_sessions
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG.with_suffix(".tmp")
+    tmp = CONFIG.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")   # sessions may start in parallel threads
     tmp.write_text(render_config(list_sessions() if sessions is None else sessions))
     os.replace(tmp, CONFIG)
     return CONFIG

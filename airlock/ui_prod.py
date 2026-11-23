@@ -13,68 +13,68 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import envs as E
-from . import gwsession, session
+from . import gwsession, kubecreds, session
 from .audit import Audit
 from .config import (HOME, ConfigError, claude_token_status, load_config, parse_kv, remove_claude_oauth_token,
                      save_claude_oauth_token)
 from .patterns import PatternError
+from .ui_kit import KIT_CSS, bar_btn, bulk_bar, chip, edit_name, kebab, kit_tail, menu, mi_act, mi_post, post_btn
 
 SID = re.compile(r"^[a-f0-9]{6,32}$")
 
 CSS = """:root{color-scheme:light dark}body{font:14px system-ui;margin:0}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #8884;padding:.4rem;text-align:left;vertical-align:top}
 .up{color:#2a9d4a}.down{color:#d33}button{padding:.2rem .6rem}.err{color:#d33;position:sticky;top:0;z-index:9;background:Canvas;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}
-.err:empty{display:none}form{display:inline}.add input,.add select,.add textarea{margin:.2rem}.chips{display:flex;flex-wrap:wrap;gap:.15rem 1.2rem;align-items:center}.chip{white-space:nowrap}
+.err:empty{display:none}.okmsg{color:#2a9d4a;padding:.4rem .6rem;border:1px solid #2a9d4a;border-radius:6px}.okmsg:empty{display:none}form{display:inline}.add input,.add select,.add textarea{margin:.2rem}.chips{display:flex;flex-wrap:wrap;gap:.15rem 1.2rem;align-items:center}.chip{white-space:nowrap}
 .lbl{color:#888}[hidden]{display:none!important}.nm{cursor:text;border-bottom:1px dotted #888}.nm:hover{background:#8882}.warn{border:1px solid #c2410c;border-radius:6px;padding:.5rem .8rem;background:#c2410c18}
 textarea{font:12px ui-monospace,monospace;width:100%;box-sizing:border-box}details{margin:.4rem 0}h2{margin-top:1.6rem}code{background:#8882;padding:0 .25rem;border-radius:3px}"""
 
-PAGE = """<!doctype html><meta charset=utf-8><title>AirlockAI - PROD</title><style>{base_css}{css}{access_css}</style>
-{nav}<main><p class=err>{error}</p>
-<div class=warn><b>PROD: Gateway mode.</b> The agent in these sessions has no ssh, kubectl or database client. Its only reach is the MCP gateway of one
-environment; credentials stay in the gateway container. Mutating tools are off unless you enable <code>approve_writes</code>, and then every call waits for you below.</div>
-<h2 id=waiting>Waiting for approval <small class=lbl>(calls blocked right now, and new access agents ask for)</small></h2><div id=wait>{waiting}</div>
-<h2>Clusters <small class=lbl>(from the local kubectl contexts and the config file)</small></h2>
-<form id=ebulk method=post action=/prod/sessions class=add><b>Selected clusters:</b>
-<button formaction=/prod/sessions onclick="return startingMsg(this)">Start session on selected</button></form>
-<style>#envscroll th{{position:sticky;top:0;background:Canvas;z-index:1}}</style><div id=envscroll style="max-height:26rem;overflow-y:auto"><table id=envs><tr><th><input type=checkbox id=eall title="select all"><th>Name <small class=lbl>(click to rename)</small><th>Status: reachable, nodes, latency<th>Links<th>Exec<th>Tools</tr>{envrows}</table></div>
-<details><summary>Add environment</summary><p style="margin:.4rem 0"><form method=post action=/prod/rescan style="display:inline"><button>Rescan local kubectl contexts</button></form> <span class=lbl>every kubectl context is an environment; a rescan adds new ones</span></p>
+PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>AirlockAI - PROD</title><style>{base_css}{css}{access_css}{kit_css}</style>
+{nav}<main><p class=err>{error}</p><p class=okmsg>{info}</p>
+<h1 style="font-size:1.05rem;margin:0 0 .3rem">PROD &middot; Gateway</h1>
+<div class=warn><b>The agent here has no ssh, kubectl or database client.</b> Its only reach is the MCP gateway of one environment; credentials stay in the
+gateway container. Mutating tools are off unless you set <code>approve_writes</code>, and then every write waits for you below.</div>
+<h2 id=waiting>Waiting for you</h2><div id=wait>{waiting}</div>
+<h2>Clusters <span class=hint>from local kubectl contexts and the config file</span></h2>
+<form id=ebulk method=post hidden></form>
+<div class=tablewrap id=envscroll><table id=envs aria-label=Clusters><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=env aria-label="Select all clusters">
+<th>Cluster<th>Status<th>Tools <span class=hint style="text-transform:none;letter-spacing:0">(click to cycle)</span><th>Links<th>Sessions<th style="width:2.5rem"></tr></thead><tbody>{envrows}</tbody></table></div>
+<details><summary class=btn style="display:inline-block;margin-top:.5rem">Add environment</summary><p style="margin:.4rem 0"><form method=post action=/prod/rescan style="display:inline"><button class=btn>Rescan local kubectl contexts</button></form>
+<span class=lbl>every kubectl context is an environment; a rescan adds new ones</span></p>
 <form method=post action=/prod/envs class=add>
-<input name=name placeholder="name (e.g. uat)" required pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{{0,63}}"> <input name=context list=ctxs placeholder="kube context"><datalist id=ctxs>{ctx_options}</datalist>
-<select name=mode><option>direct<option>ssh<option>ssh_sudo</select> <input name=host placeholder="ssh host (ssh modes)"> <input name=user placeholder="user (default $USER_NAME)">
+<input name=name placeholder="name (e.g. uat)" required pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{{0,63}}" aria-label=Name> <input name=context list=ctxs placeholder="kube context" aria-label="Kube context"><datalist id=ctxs>{ctx_options}</datalist>
+<select name=mode aria-label="Exec mode"><option>direct<option>ssh<option>ssh_sudo</select> <input name=host placeholder="ssh host (ssh modes)" aria-label="ssh host"> <input name=user placeholder="user (default $USER_NAME)" aria-label=User>
 <br>Tools: {tool_checks}<br>
-<label><input type=checkbox name=check value=1 checked> check first: <code>kubectl --context X get ns</code> (or the ssh variant)</label> <button>Add</button></form></details>
-<h2>AI Sessions</h2>
-<form id=sbulk method=post class=add><button formaction=/prod/sessions/bulk-stop onclick="return confirm('Stop selected sessions?')">Stop selected</button>
-<button formaction=/prod/sessions/bulk-delete onclick="return confirm('Delete selected sessions? Running ones are stopped first.')">Delete selected</button>
-<button formaction=/prod/sessions/prune>Remove all stopped</button> <span id=stamp class=lbl></span></form>
-<table id=sess><tr><th><input type=checkbox id=all title="select all"><th>ID<th>Status<th>Container<th>Actions<th>CPU<th>Memory<th>Workspace<th>Environment<th>Tools<th>Audit</tr>{sessions}</table>
-<h2>Query patterns <small class=lbl>(recently approved; the only queries the agent can run)</small></h2>
+<label><input type=checkbox name=check value=1 checked> check first: <code>kubectl --context X get ns</code> (or the ssh variant)</label> <button class="btn primary">Add</button></form></details>
+<h2>AI sessions <span class=hint>{sess_hint}</span> {prune} <span id=stamp class=hint></span></h2>
+<form id=psbulk method=post hidden></form>
+<div class=tablewrap><table id=sess aria-label="PROD sessions" style="min-width:820px"><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=psess aria-label="Select all PROD sessions">
+<th>Session<th>Agent<th>MCP tool calls<th>Cluster<th style="text-align:right">Open &middot; remove</tr></thead><tbody>{sessions}</tbody></table></div>
+<h2 id=patterns-h>Query patterns <small class=lbl>(recently approved; the only queries the agent can run)</small></h2>
 <div id=pwrap>{patterns}</div>
-</main>
+{env_bar}{sess_bar}{kit}
 <script>
-function startingMsg(b){{setTimeout(()=>{{b.disabled=true;b.textContent='Starting\\u2026 (15-40 s)'}},0);return true}}
-document.getElementById('eall').onchange=e=>document.querySelectorAll('#envs input[name=sel]').forEach(c=>c.checked=e.target.checked);
-document.getElementById('all').onchange=e=>document.querySelectorAll('#sess input[name=ssel]').forEach(c=>c.checked=e.target.checked);
+// Cluster status from /api/prod/stats. Error text from kubectl is set as text, never markup.
 async function etick(){{try{{const r=await fetch('/api/prod/stats');if(!r.ok)return;const d=await r.json();
-  for(const [k,s] of Object.entries(d)){{const row=document.querySelector(`tr[data-env="${{k}}"]`);if(!row)continue;const q=n=>row.querySelector(`[data-n=${{n}}]`);
-    q('dot').className='chip '+(s.up?'up':'down');q('dot').textContent=s.up?'\\u25cf up':'\\u25cf down';q('dot').title=s.error||'';
-    q('info').textContent=s.up?((s.nodes!=null?s.nodes+' nodes, ':'')+s.ms+' ms'):(s.error||'').slice(0,90)}}}}catch(e){{}}}}
+  for(const row of $$('tr[data-kind=env]')){{const s=d[row.dataset.key];if(!s)continue;const st=row.querySelector('[data-f=status]');if(!st)continue;
+    row.dataset.up=s.up?'1':'0';st.textContent='';
+    if(s.up)st.append(chipEl('c-ok','up'+(s.nodes!=null?' \\u00b7 '+Number(s.nodes)+' nodes':'')+(s.ms!=null?' \\u00b7 '+Number(s.ms)+' ms':'')));
+    else{{const b=chipEl('c-bad',(s.error||'unreachable').slice(0,90),'\\u21bb refresh');b.title=(s.error||'')+' \\u2014 click to refresh the kubectl credentials';
+      b.setAttribute('form','act');b.setAttribute('formaction','/prod/envs/refresh');b.name='sel';b.value=row.dataset.key;b.dataset.busy='refreshing\\u2026';st.append(b)}}}}
+  syncBars()}}catch(e){{}}}}
 etick();setInterval(etick,30000);
-async function stick(){{try{{const r=await fetch('/api/sessions/stats');if(!r.ok)return;const d=await r.json();
-  for(const [sid,s] of Object.entries(d)){{const row=document.querySelector(`tr[data-sid="${{sid}}"]`);if(!row)continue;const c=row.querySelector('[data-f=container]'),life=row.dataset.life;
-    c.className=s.running?'up':(life==='stopped'?'':'down');c.textContent=s.running?'\\u25cf running':(life==='stopped'?'\\u25cb not running':'\\u25cf NOT RUNNING');
-    for(const f of ['cpu','mem','workspace'])row.querySelector(`[data-f=${{f}}]`).textContent=s[f]}}
-  document.getElementById('stamp').textContent='updated '+new Date().toLocaleTimeString()}}catch(e){{}}}}
-stick();setInterval(stick,5000);
 function busy(w){{const a=document.activeElement;   // never refresh while you work in it
-  return (w.contains(a)&&a!==document.body)||w.querySelector('input[type=checkbox]:checked,form.edf:not([hidden])')}}
+  return (w.contains(a)&&a!==document.body)||w.querySelector('input[type=checkbox]:checked,form.edf:not([hidden]),button.armed')}}
 async function wtick(){{try{{const w=document.getElementById('wait');if(busy(w))return;
-  const r=await fetch('/prod/waiting-fragment');if(r.ok)w.innerHTML=await r.text()}}catch(e){{}}}}
+  const r=await fetch('/prod/waiting-fragment');if(r.ok)w.innerHTML=await r.text()}}catch(e){{}}}}   // server-rendered, escaped fragment
 setInterval(wtick,3000);
 {access_js}
 async function ptick(){{try{{const w=document.getElementById('pwrap');if(busy(w))return;
   const r=await fetch('/prod/patterns-fragment');if(r.ok)w.innerHTML=await r.text()}}catch(e){{}}}}
 setInterval(ptick,5000);
-</script>"""
+</script></main>"""
+
+MODE_TOOLS = ("kubernetes", "kubectl_commands", "remote_ops", "airflow", "disk", "django")   # tools with read / approve_writes
+
 
 def route_secrets(env_name: str) -> list[str]:
     """Secret names the approved direct routes of an environment read (SPEC 7.8); exec routes need none."""
@@ -86,7 +86,29 @@ def route_secrets(env_name: str) -> list[str]:
     return sorted({n for r in rs for n in (r.secret, r.user_secret, r.password_secret) if n})
 
 
-def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells) -> None:
+def tool_counts(sid: str) -> tuple[int, int]:
+    """(tool calls, of which writes) for a gateway session, from its audit log."""
+    f = HOME / "audit" / f"{sid}.jsonl"
+    calls = writes = 0
+    try:
+        with f.open() as fh:
+            for line in fh:
+                if '"tool.intent"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("kind") == "tool.intent":
+                    calls += 1
+                    writes += (r.get("payload") or {}).get("risk", "read") != "read"
+    except OSError:
+        pass
+    return calls, writes
+
+
+def make_prod(app: FastAPI, config_path, nav_html, base_css: str, start_async) -> None:
+    from .ui import NODE_NAME_PATTERN, prune_button, session_dead, session_row
     from .ui_access import make_access
     e = html.escape
     cache: dict[str, tuple[float, dict]] = {}
@@ -108,34 +130,64 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
     access = make_access(app, config_path, nav_html, base_css, back)
 
     # ------------------------------------------------------------------ rendering
+    def tool_chips(env: E.Environment) -> str:
+        """One chip per tool; a click saves the next mode of that tool only: off -> read -> approve_writes -> off (UI_REFACTOR_SPEC 5.2)."""
+        out = ""
+        for t in sorted(E.TOOLS):
+            cur = env.tool(t)
+            mode = "off" if cur is None else (cur.get("mode", "read") if t in MODE_TOOLS else "on")
+            nxt = {"off": "read", "read": "approve_writes" if t in MODE_TOOLS else "off", "on": "off", "approve_writes": "off"}[mode]
+            cls = {"off": "c-idle", "read": "c-ok", "on": "c-ok", "approve_writes": "c-warn"}[mode]
+            label = t if mode == "off" else f"{t}: {mode.replace('_', ' ')}"
+            out += (f'<form method=post action="/prod/envs/{quote(env.name)}/tools"><input type=hidden name=tool value="{t}">'
+                    f'<button class="chip {cls}" name=mode value={nxt} title="{e(t)} is {mode}. Click: {nxt}." '
+                    f'aria-label="{e(t)}: {mode}, click to set {nxt}"><span class=dot></span><span class=t>{e(label)}</span></button></form>')
+        return f'<div style="display:flex;flex-wrap:wrap;gap:.25rem">{out}</div>'
+
     def env_rows(cfg) -> str:
         registered = E.environments(cfg)
         templates = (cfg.defaults or {}).get("links", {}) or {}
+        gw = [s for s in session.list_sessions() if s.get("mode") == "gateway"]
         rows = ""
-        for env in registered:
-            n = e(env.name)
+        for i, env in enumerate(registered):
+            n, q = env.name, quote(env.name)
             ex = env.exec_for("kubernetes")
-            tools = " ".join(f'<span class=tag title="mode">{e(t)}:{e((env.tool(t) or {}).get("mode", "read"))}</span>' for t in env.tool_names()) or '<span class=lbl>none</span>'
             sec = E.secret_status(env, route_secrets(env.name))
-            miss = [v for v, s in sec.items() if s == "missing"]
-            secbit = (f'<br><small class=down>missing secrets: {e(", ".join(miss))}</small>' if miss else
-                      (f'<br><small class=lbl>secrets present ({len(sec)})</small>' if sec else ""))
-            tool_form = tools_form(env)
-            links = " ".join(f'<a href="{e(u)}" target=_blank rel=noopener>{e(k)}</a>' for k, u in E.env_links(env, templates).items())
-            kc = f'<br><small class=lbl>context {e(env.kube_context)}</small>' if env.kube_context else ""
-            name = (f'<div class=nmwrap><b class=nm title="Click to rename" onclick="rn(this)">{n}</b>'
-                    f'<form method=post action="/prod/envs/{n}/rename" hidden><input name=new value="{n}" size=22 required autocomplete=off '
-                    f'spellcheck=false data-orig="{n}" pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{{0,63}}" onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>{kc}')
+            miss = [v for v, st in sec.items() if st == "missing"]
+            sub = [f"context {e(env.kube_context)}" if env.kube_context else "no kube context",
+                   f"secrets {sum(1 for st in sec.values() if st == 'present')}", e(ex.mode) + (f" via {e(ex.host)}" if ex.host else "")]
+            subline = " &middot; ".join(sub) + (f'<div style="color:var(--bad)">missing secrets: {e(", ".join(miss))}</div>' if miss else "")
+            links = " ".join(f'<a class=lnk href="{e(u)}" target=_blank rel=noopener>{e(k)}</a>' for k, u in E.env_links(env, templates).items())
+            name = edit_name(n, f"/prod/envs/{q}/rename", pattern=NODE_NAME_PATTERN, placeholder="cluster name", size=22)
+            secform = (f'<form id=sec{i} method=post action="/prod/envs/{q}/secret" class=inline hidden>'
+                       '<input name=var placeholder="VAR (e.g. PG_DSN)" size=14 required aria-label="Secret name">'
+                       '<input type=password name=value placeholder="value (never shown again)" size=24 autocomplete=off required aria-label="Secret value">'
+                       f'<button class="btn primary mini">Set secret</button><button type=button class="btn mini" data-hide=sec{i}>Cancel</button></form>')
             opts = "".join(f"<option{' selected' if m == ex.mode else ''}>{m}" for m in ("direct", "ssh", "ssh_sudo"))
-            mode = (f'<form method=post action="/prod/envs/{n}/mode" class=add><select name=mode onchange="this.form.submit()">{opts}</select>'
-                    f'<input name=host value="{e(ex.host or "")}" placeholder="ssh host" size=16></form>')
-            status = (f'<div class=chips><span class=chip data-n=dot>&hellip;</span><span class=chip data-n=info class=lbl></span></div>'
-                      if env.kube_context else '<span class=lbl>no kube context</span>')
-            rows += (f'<tr data-env="{n}"><td><input type=checkbox name=sel value="{n}" form=ebulk><td>{name}'
-                     f'<td>{status}<td>{links}<td>{mode}<td>{tools}{secbit}{tool_form}</tr>')
-        return rows or '<tr><td colspan=6><span class=lbl>No kubectl contexts found and no environments in the config. Use "Add environment".</span></tr>'
+            modeform = (f'<form id=mode{i} method=post action="/prod/envs/{q}/mode" class=inline hidden><select name=mode aria-label="Exec mode">{opts}</select>'
+                        f'<input name=host value="{e(ex.host or "")}" placeholder="ssh host" size=16 aria-label="ssh host">'
+                        f'<button class="btn primary mini">Save</button><button type=button class="btn mini" data-hide=mode{i}>Cancel</button></form>')
+            toolsform = f'<div id=tools{i} class=inline hidden>{tools_form(env, i)}</div>'
+            status = (f'<td data-f=status>{chip("c-idle", "checking" + chr(0x2026))}' if env.kube_context
+                      else f'<td>{chip("c-idle", "no kube context")}')
+            mine = [s for s in gw if s.get("environment") == n]
+            dead = sum(1 for s in mine if session_dead(s))
+            cnt = " ".join(x for x in (f"<span><b>{len(mine) - dead}</b> running</span>" if len(mine) - dead else "",
+                                       f"<span class=hot><b>{dead}</b> not running</span>" if dead else "") if x)
+            cnt = f'<span class="meta row">{cnt}</span>' if cnt else "<span class=hint>&ndash;</span>"
+            items = [mi_post("Start session", "/prod/sessions", "env", n, need="up", key="s", extra='data-start data-busy="Starting…"'),
+                     mi_act("Rename", "rename"), mi_act("Set secret…", "reveal", target=f"sec{i}"),
+                     mi_act("Tool settings…", "reveal", target=f"tools{i}"), mi_act("Exec mode…", "reveal", target=f"mode{i}"),
+                     mi_post("Refresh kubectl token", "/prod/envs/refresh", "sel", n), "-",
+                     mi_post("Remove from list", "/prod/envs/bulk-delete", "sel", n, danger=True, arm="Remove from the list?")]
+            rows += (f'<tr data-kind=env data-key="{e(n)}" data-env="{e(n)}" data-up={0 if env.kube_context else 1}>'
+                     f'<td><input type=checkbox class=rowsel name=sel value="{e(n)}" form=ebulk aria-label="Select {e(n)}">'
+                     f'<td>{name}<small class=sub>{subline}</small>{secform}{modeform}{status}<td>{tool_chips(env)}{toolsform}'
+                     f'<td>{links}<td>{cnt}<td>{kebab(n)}{menu(n, items)}</tr>')
+        return rows or '<tr><td colspan=7 class=hint>No kubectl contexts found and no environments in the config. Use "Add environment".</tr>'
 
-    def tools_form(env: E.Environment) -> str:
+    def tools_form(env: E.Environment, i: int = 0) -> str:
+        """Every tool with its settings (k=v), for what a chip cannot say. The chips are the everyday control."""
         rows = ""
         for t in sorted(E.TOOLS):
             cur = env.tool(t)
@@ -143,51 +195,53 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
             mode = (cur or {}).get("mode", "read")
             rest = ",".join(f"{k}={'|'.join(v) if isinstance(v, list) else v}" for k, v in (cur or {}).items() if k not in ("mode", "exec", "commands") and not isinstance(v, dict))
             rows += (f'<div><label><input type=checkbox name="on_{t}" value=1 {"checked" if on else ""}> {t}</label> '
-                     f'<select name="mode_{t}"><option {"selected" if mode == "read" else ""}>read<option {"selected" if mode == "approve_writes" else ""}>approve_writes</select> '
-                     f'<input name="cfg_{t}" value="{e(rest)}" placeholder="k=v,k=v" size=40></div>')
-        sec = E.secret_status(env, route_secrets(env.name))
-        secrow = ""
-        if sec:
-            secrow = ("<div>Secrets: " + ", ".join(f"<code>{e(v)}</code> {'<span class=up>present</span>' if s == 'present' else '<span class=down>missing</span>'}"
-                                                   for v, s in sec.items()) + "</div>")
-        return (f'<details><summary>edit</summary><form method=post action="/prod/envs/{e(env.name)}/tools" class=add>{rows}<button>Save tools</button></form>{secrow}'
-                f'<form method=post action="/prod/envs/{e(env.name)}/secret" class=add><input name=var placeholder="VAR (e.g. PG_DSN)" size=14 required>'
-                f'<input type=password name=value placeholder="value (masked, stored 0600 in the secrets dir)" size=30 autocomplete=off required><button>Set secret</button></form></details>')
+                     f'<select name="mode_{t}" aria-label="{t} mode"><option {"selected" if mode == "read" else ""}>read<option {"selected" if mode == "approve_writes" else ""}>approve_writes</select> '
+                     f'<input name="cfg_{t}" value="{e(rest)}" placeholder="k=v,k=v" size=40 aria-label="{t} settings"></div>')
+        return (f'<form method=post action="/prod/envs/{e(env.name)}/tools" class=add>{rows}<button class="btn primary mini">Save tools</button> '
+                f'<button type=button class="btn mini" data-hide=tools{i}>Cancel</button></form>')
 
     def session_rows() -> str:
         out = ""
         for s in session.list_sessions():
             if s.get("mode") != "gateway":
                 continue
-            sid = e(s["id"])
-            idcell, sshcmd = session_cells(s)
-            links = (f'<a href=/sessions/{sid}/term target=_blank rel=noopener>shell</a> '
-                     f'<a href="/sessions/{sid}/term?cmd=claude" target=_blank rel=noopener>claude</a>' if s["status"] == "running" else "")
-            err = f'<br><small class=down>{e(s["error"])}</small>' if s.get("error") else ""
+            sid = s["id"]
+            calls, writes = tool_counts(sid)
+            metrics = (f'<span class="meta row"><span><b>{calls}</b> calls</span><span><b>{writes}</b> writes</span>'
+                       f'<a class=lnk href="/audit/{e(sid)}" target=_blank rel=noopener>live log &#x2197;</a></span>')
             kube = ""
             if (s.get("kube") or s.get("kube_error")) and s["status"] == "running":
                 exp = (s.get("kube") or {}).get("expires")
                 if s.get("kube_error"):
-                    kube = f'<br><small class=down>k8s: {e(s["kube_error"])}</small> '
+                    kube = f'<div class=sub style="color:var(--bad)">k8s: {e(s["kube_error"])}</div>'
                 else:
                     left = "expired" if exp and exp < time.time() else ("until " + time.strftime("%a %H:%M", time.localtime(exp)) if exp else "")
-                    kube = f'<br><small class="{"down" if exp and exp < time.time() + 3600 else "lbl"}">k8s token {left}</small> '
-                kube += (f'<form method=post action="/prod/sessions/{sid}/kube-refresh">'
-                         f'<button title="get a new token on this machine (may open the browser to sign in)">refresh</button></form>')
-            out += (f'<tr data-sid="{sid}" data-life="{e(s["status"])}"><td><input type=checkbox name=ssel value="{sid}" form=sbulk><td>{idcell}<td>{e(s["status"])}{err}'
-                    f'<td data-f=container>&hellip;<td>{links}{sshcmd}<td data-f=cpu>-<td data-f=mem>-<td data-f=workspace>-<td>{e(s.get("environment", ""))}'
-                    f'<td>{e(", ".join(s.get("tools", [])))}{kube}<td><a href=/audit/{sid} target=_blank>log</a></tr>')
-        return out
+                    kube = f'<div class=sub{" style=color:var(--bad)" if exp and exp < time.time() + 3600 else ""}>k8s token {left}</div>'
+                kube += post_btn("↻ refresh token", f"/prod/sessions/{sid}/kube-refresh", "x", "1", cls="btn mini",
+                                 title="get a new token on this machine (may open the browser to sign in)")
+            out += session_row(s, kind="psess", form="psbulk", rm="/prod/sessions/bulk-remove", stop="/prod/sessions/bulk-stop",
+                               metrics=metrics, where=s.get("environment", ""), extra=kube)
+        return out or '<tr><td colspan=6 class=hint style="text-align:center;padding:1rem">No PROD sessions. Tick a cluster and click Start session.</tr>'
 
     # ------------------------------------------------------------------ pages
     @app.get("/prod", response_class=HTMLResponse)
-    def prod_page(error: str = ""):
+    def prod_page(error: str = "", info: str = ""):
         cfg = load_config(config_path)
         ctx = "".join(f'<option value="{e(c)}">' for c in E.kubectl_contexts())
         checks = " ".join(f'<label><input type=checkbox name="on_{t}" value=1 {"checked" if t == "kubernetes" else ""}> {t}</label>' for t in sorted(E.TOOLS))
-        body = PAGE.format(base_css=base_css, css=CSS, nav=nav_html("prod"), error=e(error), envrows=env_rows(cfg), ctx_options=ctx, tool_checks=checks,
-                           waiting=access["waiting"](), sessions=session_rows(), patterns=access["fragment"](),
-                           access_css=access["css"], access_js=access["js"])
+        gw = [s for s in session.list_sessions() if s.get("mode") == "gateway"]
+        env_bar = bulk_bar("env", "cluster", "clusters", [
+            bar_btn("Start session", "ebulk", "/prod/sessions", need="up", only=True, labeln="Start {n} sessions", primary=True,
+                    busy="Starting…", start=True),
+            bar_btn("Refresh tokens", "ebulk", "/prod/envs/refresh", busy="Refreshing…")])
+        sess_bar = bulk_bar("psess", "session", "sessions", [
+            bar_btn("Stop & remove", "psbulk", "/prod/sessions/bulk-remove", arm="Stop {n} running & remove?", arm_need="live", danger=True),
+            bar_btn("Stop only", "psbulk", "/prod/sessions/bulk-stop", need="live", only=True)])
+        body = PAGE.format(base_css=base_css, css=CSS, kit_css=KIT_CSS, kit=kit_tail(), nav=nav_html("prod"), error=e(error), info=e(info),
+                           envrows=env_rows(cfg), ctx_options=ctx, tool_checks=checks, waiting=access["waiting"](), sessions=session_rows(),
+                           patterns=access["fragment"](), access_css=access["css"], access_js=access["js"], env_bar=env_bar, sess_bar=sess_bar,
+                           sess_hint=f'{sum(1 for s in gw if s["status"] == "running")} running',
+                           prune=prune_button("/prod/sessions/prune", sum(1 for s in gw if session_dead(s))))
         return tab_response(body)
 
     @app.get("/api/prod/stats")
@@ -300,13 +354,57 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
 
     @app.post("/prod/envs/{name}/tools")
     async def env_tools(name: str, request: Request):
+        """Either the full tools form, or one chip click: `tool` + `mode` (off | read | approve_writes), which changes that tool
+        only and keeps the others and their settings as they are (UI_REFACTOR_SPEC 7.4)."""
         form = await request.form()
-        def go():
+
+        def one():
+            t, mode = str(form.get("tool", "")), str(form.get("mode", ""))
+            if t not in E.TOOLS:
+                raise ConfigError(f"unknown tool {t!r}")
+            if mode not in ("off", "read", "approve_writes"):
+                raise ConfigError("mode is off, read or approve_writes")
+            env = E.environment(load_config(config_path), name)
+            tools = {x: dict(env.tool(x) or {}) for x in env.tool_names()}
+            if mode == "off":
+                tools.pop(t, None)
+            elif t in MODE_TOOLS:
+                tools[t] = {**tools.get(t, {}), "mode": mode}
+            elif mode == "approve_writes":
+                raise ConfigError(f"{t} has no approve_writes mode")
+            else:
+                tools.setdefault(t, {})
+            E.set_env_tools(config_path, name, tools)
+            Audit("settings").log("ui", "env.tool", environment=name, tool=t, mode=mode)
+
+        def full():
             tools = tools_from_form(form)
             cur = E.environment(load_config(config_path), name).tool("kubectl_commands") or {}
             if "kubectl_commands" in tools and cur.get("commands"):
                 tools["kubectl_commands"]["commands"] = cur["commands"]   # defined in the config file, not editable in this form
             E.set_env_tools(config_path, name, tools)
+        return back(one if "tool" in form else full)
+
+    @app.post("/prod/envs/refresh")
+    def env_refresh(sel: list[str] = Form([])):
+        """New kubectl credentials for these clusters: runs the context's login plugin on this machine (it may open the browser),
+        then hands the new token to every running session of the cluster and probes the cluster again."""
+        def go():
+            if not sel:
+                raise ConfigError("select at least one cluster")
+            cfg = load_config(config_path)
+            for n in dict.fromkeys(sel):
+                env = E.environment(cfg, n)
+                ctxs = kubecreds.contexts(env)
+                if not ctxs:
+                    raise ConfigError(f"{n}: no kubectl context to refresh")
+                kubecreds.build(ctxs)
+                for s in gwsession.gateway_sessions():
+                    if s.get("environment") == n and s["status"] == "running":
+                        gwsession.refresh_kube(cfg, s["id"])
+                with lock:
+                    for c in ctxs:
+                        cache.pop(c, None)
         return back(go)
 
     @app.post("/prod/envs/{name}/secret")
@@ -316,10 +414,10 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
     # ------------------------------------------------------------------ sessions
     @app.post("/prod/sessions")
     def start(env: list[str] = Form([]), sel: list[str] = Form([]), ctx: list[str] = Form([])):
-        names = env + sel
-
-        def go():
-            known = E.kubectl_contexts()
+        """One session per cluster (a row's menu sends `env`, the bulk bar `sel`), started in the background (UI_REFACTOR_SPEC 7.5)."""
+        names = list(dict.fromkeys(env + sel))
+        try:
+            known = E.kubectl_contexts() if ctx else []
             for c in ctx:  # a local kubectl context that is not registered yet: register it, then start
                 if c not in known:
                     raise ConfigError("unknown kubectl context")
@@ -329,9 +427,9 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
             if not names:
                 raise ConfigError("select at least one cluster")
             cfg = load_config(config_path)
-            for n in names:
-                gwsession.start_gateway_session(cfg, config_path, n)
-        return back(go)
+        except (ConfigError, RuntimeError) as ex:
+            return RedirectResponse("/prod?error=" + quote(str(ex)), status_code=303)
+        return start_async([(n, lambda n=n: gwsession.start_gateway_session(cfg, config_path, n)) for n in names], "/prod")
 
     def ids(ssel):
         if not all(SID.match(x) for x in ssel):
@@ -352,6 +450,15 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
                     session.stop_session(cfg, sid)
         return back(go)
 
+    @app.post("/prod/sessions/bulk-remove")
+    def bulk_remove(ssel: list[str] = Form([])):
+        """Same one-click remove as the EC2 tab (session.remove_many), for gateway sessions only."""
+        def go():
+            left = session.remove_many(load_config(config_path), ids(ssel))
+            if left:
+                raise ConfigError("removed. Access may remain on: " + ", ".join(left) + " (run airlock sweep once reachable)")
+        return back(go)
+
     @app.post("/prod/sessions/bulk-delete")
     def bulk_delete(ssel: list[str] = Form([])):
         return back(lambda: session.delete_many(ids(ssel), load_config(config_path)))
@@ -365,9 +472,10 @@ def make_prod(app: FastAPI, config_path, nav_html, base_css: str, session_cells)
     @app.post("/prod/sessions/prune")
     def prune():
         def go():
-            for s in session.list_sessions():
-                if s.get("mode") == "gateway" and s["status"] == "stopped":
-                    session.delete_session(s["id"])
+            dead = session.dead_sessions("gateway")
+            left = session.remove_many(load_config(config_path), dead) if dead else []
+            if left:
+                raise ConfigError("removed. Access may remain on: " + ", ".join(left) + " (run airlock sweep once reachable)")
         return back(go)
 
     # ------------------------------------------------------------------ query patterns

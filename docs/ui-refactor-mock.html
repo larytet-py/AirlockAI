@@ -1,0 +1,723 @@
+<title>AirlockAI One-Click UX</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: the real EC2 tab (left tab strip + main column): a nodes table and a sessions table. No toolbars: clickable chips, a context menu, and a bulk bar that appears only on selection. */
+:root{
+  --bg:#ffffff; --fg:#1d2330; --muted:#6b7385; --line:#d9dde6; --hover:#f1f4fa; --panel:#ffffff;
+  --accent:#2a6df4; --accent-fg:#ffffff; --prod:#c2410c;
+  --ok:#1f8f43; --bad:#d33a2c; --warn:#b26b00; --chipbg:#eef1f7;
+  --shadow:0 6px 24px rgba(20,30,60,.16);
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#14171e; --fg:#e4e8f0; --muted:#8d95a8; --line:#2c323e; --hover:#1d222c; --panel:#1b1f28;
+  --accent:#5a8dff; --accent-fg:#0b1020; --prod:#f07a3a;
+  --ok:#4cc576; --bad:#ff6b5c; --warn:#e6a23c; --chipbg:#232936; --shadow:0 6px 24px rgba(0,0,0,.5); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#14171e; --fg:#e4e8f0; --muted:#8d95a8; --line:#2c323e; --hover:#1d222c; --panel:#1b1f28;
+  --accent:#5a8dff; --accent-fg:#0b1020; --prod:#f07a3a;
+  --ok:#4cc576; --bad:#ff6b5c; --warn:#e6a23c; --chipbg:#232936; --shadow:0 6px 24px rgba(0,0,0,.5); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 var(--font);margin:0;display:flex;min-height:100vh}
+nav{position:sticky;top:0;align-self:flex-start;height:100vh;width:9rem;flex:none;padding:1rem .6rem;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:.4rem}
+.brand{font-weight:700;margin-bottom:.6rem}
+nav a{display:flex;justify-content:space-between;align-items:center;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;border:1px solid var(--line);font-weight:600;border-left-width:4px}
+nav a.ec2{border-left-color:var(--accent)} nav a.prod{border-left-color:var(--prod)}
+nav a.on{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.badge{font-size:.75rem;background:var(--chipbg);color:var(--fg);border-radius:9px;padding:0 .45rem}
+nav small{color:var(--muted);margin-top:auto}
+main{flex:1;min-width:0;padding-block:1rem 6rem;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+@media (min-width:760px){main{padding-left:2rem;padding-right:2rem}}
+@media (max-width:640px){nav{display:none}}
+.top{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;justify-content:space-between;margin-bottom:.4rem}
+h1{font-size:1.05rem;margin:0}
+h2{font-size:1rem;margin:1.6rem 0 .5rem;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.hint{color:var(--muted);font-size:.85rem}
+kbd{font:600 .75rem var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 .3rem;background:var(--panel)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:900px}
+th,td{border-bottom:1px solid var(--line);padding:.5rem .55rem;text-align:left;vertical-align:top}
+th{font-size:.78rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:var(--panel);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--hover)}
+tbody tr.sel{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+tbody tr.cursor{outline:2px solid var(--accent);outline-offset:-2px}
+.nm{font-weight:650}
+.nm.edit{cursor:text;border-bottom:1px dotted var(--muted)}
+.nm.edit:hover{background:var(--hover)}
+.sub{color:var(--muted);font:.78rem var(--mono)}
+.chip{display:inline-flex;align-items:center;gap:.35rem;padding:.1rem .55rem;border-radius:999px;background:var(--chipbg);font-size:.82rem;white-space:nowrap;border:1px solid transparent;color:var(--fg)}
+.chip .dot{width:.55rem;height:.55rem;border-radius:50%;background:currentColor;flex:none}
+.chip.ok{color:var(--ok)} .chip.bad{color:var(--bad)} .chip.warn{color:var(--warn)} .chip.idle{color:var(--muted)}
+.chip.ok span:nth-child(2),.chip.bad span:nth-child(2),.chip.warn span:nth-child(2),.chip.idle span:nth-child(2){color:var(--fg)}
+button.chip{cursor:pointer;font:inherit;font-size:.82rem}
+button.chip:hover{border-color:currentColor}
+button.chip .go{color:var(--muted);font-size:.75rem}
+.chip.warn .dot{animation:pulse 1s infinite alternate}
+@keyframes pulse{to{opacity:.3}}
+.meta{display:flex;flex-wrap:wrap;gap:.2rem .9rem;color:var(--muted);font-size:.82rem}
+.meta b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+.meta .hot b{color:var(--bad)}
+button{font:inherit;color:inherit}
+.btn{padding:.22rem .65rem;border-radius:6px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-size:.85rem;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
+.btn.danger{color:var(--bad)}
+.btn.danger.armed{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn.mini{padding:.05rem .45rem;font-size:.8rem}
+.btn:disabled{opacity:.5;cursor:default}
+.kebab{width:1.9rem;height:1.7rem;border-radius:6px;border:1px solid transparent;background:none;cursor:pointer;font-size:1.1rem;line-height:1;color:var(--muted)}
+.kebab:hover,.kebab[aria-expanded="true"]{border-color:var(--line);background:var(--panel);color:var(--fg)}
+a.lnk{color:var(--accent);text-decoration:none;font-size:.85rem;white-space:nowrap} a.lnk:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=checkbox]{width:1rem;height:1rem;accent-color:var(--accent);cursor:pointer}
+.cmd{display:inline-flex;align-items:center;gap:.35rem;margin-top:.2rem;font:.78rem var(--mono);background:var(--chipbg);color:var(--fg);border:1px solid transparent;border-radius:4px;padding:.05rem .4rem;cursor:copy;max-width:100%}
+.cmd span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd:hover{border-color:var(--accent)}
+.cmd .ic{color:var(--muted);font-family:var(--font)}
+.cmd.done{border-color:var(--ok);color:var(--ok)}
+.rename{font:inherit;font-weight:650;padding:.05rem .3rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--fg);width:14rem;max-width:100%}
+
+/* agent cell inside a node row */
+.agents{display:grid;gap:.45rem;min-width:17rem}
+.agent{display:grid;gap:.15rem;padding-left:.55rem;border-left:3px solid var(--ok)}
+.agent.dead{border-left-color:var(--bad)} .agent.stopped{border-left-color:var(--line)} .agent.starting{border-left-color:var(--warn)}
+.agent .line{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .6rem}
+.agent .multi{color:var(--muted);font-size:.78rem}
+.start{display:inline-flex;align-items:center;gap:.4rem}
+.start .play{font-size:.7rem}
+.down{color:var(--muted);font-size:.85rem}
+
+/* context / kebab menu */
+.menu{position:fixed;z-index:50;min-width:13rem;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:.3rem;font-size:.88rem}
+.menu .hd{padding:.3rem .6rem .2rem;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+.menu button{display:flex;width:100%;justify-content:space-between;gap:1rem;padding:.38rem .6rem;border:0;background:none;border-radius:5px;cursor:pointer;text-align:left}
+.menu button:hover,.menu button:focus-visible{background:var(--hover);outline:none}
+.menu button.danger{color:var(--bad)}
+.menu button .k{color:var(--muted);font:.75rem var(--mono)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:.3rem 0}
+
+/* bulk bar: only exists while rows are ticked */
+.bulk{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(1rem + env(safe-area-inset-bottom,0px));z-index:40;display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;
+  background:var(--fg);color:var(--bg);border-radius:10px;padding:.45rem .55rem .45rem .9rem;box-shadow:var(--shadow);max-width:calc(100vw - 32px)}
+.bulk .count{font-weight:650;margin-right:.3rem}
+.bulk .btn{background:transparent;color:var(--bg);border-color:color-mix(in srgb,var(--bg) 35%,transparent)}
+.bulk .btn:hover{border-color:var(--bg)}
+.bulk .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.bulk .btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 60%,transparent)}
+.bulk .btn.danger.armed{background:var(--bad);color:#fff}
+.bulk .x{background:none;border:0;color:var(--bg);opacity:.7;cursor:pointer;font-size:1.1rem;padding:0 .3rem}
+
+.toasts{position:fixed;right:calc(1rem + env(safe-area-inset-right,0px));top:calc(1rem + env(safe-area-inset-top,0px));z-index:60;display:flex;flex-direction:column;gap:.5rem;max-width:min(26rem,calc(100vw - 32px))}
+.toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);border-radius:8px;padding:.55rem .8rem;box-shadow:var(--shadow);font-size:.88rem}
+.toast.warn{border-left-color:var(--warn)}
+.toast code{font:.8rem var(--mono)}
+
+.notes{display:none;border:1px dashed var(--accent);border-radius:8px;padding:.6rem .9rem;margin:.6rem 0 0;font-size:.86rem;background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.notes ul{margin:.3rem 0 0;padding-left:1.1rem;display:grid;gap:.2rem}
+body.shownotes .notes{display:block}
+.tag{display:none;font:700 .68rem var(--mono);color:var(--accent-fg);background:var(--accent);border-radius:4px;padding:0 .3rem;margin-left:.3rem;vertical-align:middle}
+body.shownotes .tag{display:inline-block}
+.notes .tag{display:inline-block;margin:0 .2rem 0 0}
+.toggle{display:inline-flex;gap:.4rem;align-items:center;font-size:.85rem;color:var(--muted);cursor:pointer}
+
+.help{position:fixed;inset:0;z-index:70;background:color-mix(in srgb,#000 45%,transparent);display:grid;place-items:center;padding:16px}
+.help>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1rem 1.2rem;box-shadow:var(--shadow);max-width:26rem;width:100%}
+.help dl{display:grid;grid-template-columns:auto 1fr;gap:.35rem .9rem;margin:.6rem 0 0}
+.help dt{text-align:right}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.sesstable table{min-width:820px}
+</style>
+
+<nav aria-label="Tabs">
+  <div class="brand">AirlockAI</div>
+  <a href="#ec2" data-view="ec2" class="ec2 on">EC2 <span class="badge" id="ec2badge">2</span></a>
+  <a href="#prod" data-view="prod" class="prod">PROD <span class="badge">0</span></a>
+  <a href="#config" data-view="config" style="border-left-width:1px">Settings</a>
+  <small>UX mock · fictional data</small>
+</nav>
+
+<main>
+<section id="v-ec2">
+  <div class="top">
+    <h1>EC2 · Sandbox</h1>
+    <label class="toggle"><input type="checkbox" id="notesToggle"> Show design notes</label>
+  </div>
+  <div class="hint">Tick nodes to start sessions. Click a name to edit it, click an <code>ssh …</code> line to copy it, <kbd>⋯</kbd> or right-click for the rest. Press <kbd>?</kbd> for keys.</div>
+  <div class="notes">
+    <b>What to look at</b>
+    <ul>
+      <li><span class="tag">D</span> Starting a session: tick one or more nodes, then <i>Start session</i> in the bar at the bottom (one session per node). Also in the node's <kbd>⋯</kbd> / right-click menu. The node rows have no start button.</li>
+      <li><span class="tag">F</span> Status chips act when there is an obvious next step: a stopped instance starts, a dead agent is removed, a missing login opens Settings.</li>
+      <li><span class="tag">1×</span> Click a node or session name to edit it. Click an <code>ssh …</code> line to copy it. A session's name is its ssh host, so its line follows a rename.</li>
+      <li><span class="tag">C</span> <kbd>⋯</kbd> and right-click open the same menu with the rarer actions.</li>
+      <li><span class="tag">2×</span> Stopping something that runs arms on the first click and runs on the second. Removing something that is not running is one click.</li>
+    </ul>
+  </div>
+
+  <h2>Nodes <span class="hint" id="nodeHint"></span></h2>
+  <div class="tablewrap">
+    <table id="nodes" aria-label="Nodes" style="min-width:760px">
+      <thead><tr><th style="width:2rem"><input type="checkbox" id="nall" aria-label="Select all nodes"></th><th>Node <span class="tag">1×</span></th><th>Status <span class="tag">F</span></th><th>Load</th><th>Links</th><th>Sessions</th><th style="width:2.5rem"><span class="tag">C</span></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap"><button class="btn" id="addNode">+ Add node</button> <button class="btn" id="importAws">Import my AWS instances</button></div>
+
+  <h2>AI sessions <span class="hint" id="sessHint"></span> <button class="btn" id="pruneBtn" hidden></button></h2>
+  <div class="tablewrap sesstable">
+    <table id="sess" aria-label="AI sessions">
+      <thead><tr><th style="width:2rem"><input type="checkbox" id="sall" aria-label="Select all sessions"></th><th>Session <span class="tag">1×</span></th><th>Agent <span class="tag">F</span></th><th>CPU · memory · workspace</th><th>Node</th><th style="text-align:right">Open · remove</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+<section id="v-prod" hidden>
+  <div class="top"><h1>PROD · Gateway</h1></div>
+  <div class="hint">The agent here has no ssh, kubectl or database client. Its only reach is the MCP gateway of one environment. Writes wait for you below.</div>
+
+  <h2>Waiting for you <span class="hint" id="waitHint"></span></h2>
+  <div id="waiting" style="display:grid;gap:.5rem"></div>
+
+  <h2>Clusters <span class="hint">from local kubectl contexts and the config file</span></h2>
+  <div class="tablewrap">
+    <table id="clusters" aria-label="Clusters" style="min-width:760px">
+      <thead><tr><th style="width:2rem"><input type="checkbox" id="call" aria-label="Select all clusters"></th><th>Cluster <span class="tag">1×</span></th><th>Status <span class="tag">F</span></th><th>Tools <span class="tag">1×</span></th><th>Links</th><th>Sessions</th><th style="width:2.5rem"><span class="tag">C</span></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <h2>AI sessions <span class="hint" id="psessHint"></span> <button class="btn" id="ppruneBtn" hidden></button></h2>
+  <div class="tablewrap sesstable">
+    <table id="psess" aria-label="PROD sessions">
+      <thead><tr><th style="width:2rem"><input type="checkbox" id="psall" aria-label="Select all PROD sessions"></th><th>Session <span class="tag">1×</span></th><th>Agent <span class="tag">F</span></th><th>MCP tool calls</th><th>Cluster</th><th style="text-align:right">Open · remove</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="v-config" hidden>
+  <div class="top"><h1>Settings</h1></div>
+  <div class="hint">Shared by every session on both tabs. Every control here is one click.</div>
+
+  <h2>Claude sign-in</h2>
+  <div id="signin" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap"></div>
+
+  <h2>Node login <span class="hint">used by the controller once per session to install the session key and sudo rule</span></h2>
+  <div id="nodelogin" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap"></div>
+
+  <h2>Source folders mounted into agents <span class="hint">default list; a node can have its own</span></h2>
+  <div class="tablewrap">
+    <table id="folders" aria-label="Source folders" style="min-width:560px">
+      <thead><tr><th>Folder</th><th>Mounted as</th><th>Mode <span class="tag">1×</span></th><th>Enabled <span class="tag">1×</span></th><th style="text-align:right">Remove</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <form id="addFolder" style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap">
+    <input id="folderPath" class="rename" style="font-weight:400;width:18rem" placeholder="~/src/another-repo" aria-label="Folder path">
+    <button class="btn">Add folder</button>
+  </form>
+
+  <h2>Access</h2>
+  <div class="hint">Approved routes and query patterns live on their own page: <a class="lnk" href="#" onclick="event.preventDefault();toast('Opens Settings → Access')">Access →</a></div>
+</section>
+</main>
+
+<div class="bulk" id="bulk" hidden role="toolbar" aria-label="Selected rows"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="menu" id="menu" hidden role="menu"></div>
+<div class="help" id="help" hidden><div>
+  <b>Mouse and keyboard</b>
+  <dl>
+    <dt>click name</dt><dd>edit it (Enter saves, Esc cancels)</dd>
+    <dt>click ssh …</dt><dd>copy the command</dd>
+    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move between rows</dd>
+    <dt><kbd>x</kbd></dt><dd>tick the row</dd>
+    <dt><kbd>s</kbd></dt><dd>start a session on the node (or on the ticked nodes)</dd>
+    <dt><kbd>Enter</kbd></dt><dd>open claude for the session</dd>
+    <dt><kbd>Del</kbd></dt><dd>remove the session (twice if it is running)</dd>
+    <dt><kbd>m</kbd></dt><dd>open the row menu</dd>
+    <dt><kbd>Esc</kbd></dt><dd>close menu, clear selection</dd>
+  </dl>
+  <p style="margin:.8rem 0 0;text-align:right"><button class="btn" id="helpClose">Close</button></p>
+</div></div>
+
+<script>
+// ---------- example data (fictional) ----------
+const nodes=[
+  {name:"JaneTestApi",user:"jane",host:"10.20.4.17",iid:"i-0a4f19c2be7d31e05",ec2:"running",up:true,avg:[0.42,0.51,0.48],tasks:"2/913",cores:8,disk:"41%",data:"63%",mode:"ssh",src:"api, shared-lib"},
+  {name:"JaneTestGateway",user:"jane",host:"10.20.4.22",iid:"i-03c7e2a1f9b84d6a0",ec2:"running",up:true,avg:[9.60,7.84,5.12],tasks:"11/1204",cores:8,disk:"88%",mode:"ssh_sudo",src:"gateway"},
+  {name:"LoadTest01",user:"jane",host:"10.20.9.5",iid:"i-0f1e8d7c6b5a49382",ec2:"stopped",up:false,mode:"ssh",src:"none"},
+  {name:"PaymentsSandbox",user:"jane",host:"10.20.6.41",iid:"i-07b2c9d4e1f6a8053",ec2:"running",up:false,login:true,mode:"ssh",src:"payments"},
+  {name:"SearchIndexer",user:"jane",host:"10.20.7.12",iid:"i-0c3a5e7f9b1d2468a",ec2:"running",up:true,avg:[1.10,0.97,0.88],tasks:"3/402",cores:4,disk:"52%",mode:"ssh",src:"indexer"},
+];
+const sessions=[
+  {id:"c9d4e612",name:"api-refactor",state:"running",agent:"up",cpu:"3.2%",mem:"412 MB",ws:"1.4 GB",node:"JaneTestApi"},
+  {id:"7a21be90",name:"gw-trace",state:"running",agent:"up",cpu:"0.4%",mem:"188 MB",ws:"220 MB",node:"JaneTestGateway"},
+  {id:"2f88c013",name:"loadgen",state:"running",agent:"dead",node:"LoadTest01"},
+  {id:"e5a0d771",name:"",state:"needs_cleanup",agent:"dead",node:"LoadTest01"},
+  {id:"91bc3f02",name:"old-spike",state:"stopped",agent:"dead",node:"JaneTestApi"},
+];
+const sel={nodes:new Set(),sess:new Set()};
+let cursor=null;   // {kind,key}
+
+const $=s=>document.querySelector(s);
+const h=(tag,attrs={},...kids)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs)){
+  if(k==="class")e.className=v;else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);else if(v===true)e.setAttribute(k,"");else if(v!==false&&v!=null)e.setAttribute(k,v)}
+  for(const c of kids.flat())if(c!=null&&c!==false)e.append(c.nodeType?c:document.createTextNode(c));return e};
+const tag=t=>h("span",{class:"tag"},t);
+const stop=e=>e.stopPropagation();
+function toast(msg,kind=""){const t=h("div",{class:"toast "+kind});t.innerHTML=msg;$("#toasts").append(t);setTimeout(()=>t.remove(),5200)}
+
+function armButton(btn,label,run){
+  btn.addEventListener("click",e=>{stop(e);
+    if(btn.classList.contains("armed")){run();return}
+    const orig=btn.textContent;btn.classList.add("armed");btn.textContent=label;
+    setTimeout(()=>{if(btn.isConnected&&btn.classList.contains("armed")){btn.classList.remove("armed");btn.textContent=orig}},3000)})}
+
+function copyCmd(text){
+  const b=h("button",{class:"cmd",title:"Click to copy"},h("span",{},text),h("span",{class:"ic"},"⧉"));
+  b.addEventListener("click",e=>{stop(e);
+    const ok=()=>{b.classList.add("done");b.lastChild.textContent="copied";setTimeout(()=>{b.classList.remove("done");b.lastChild.textContent="⧉"},900)};
+    const fallback=()=>{const r=document.createRange();r.selectNodeContents(b.firstChild);const s=getSelection();s.removeAllRanges();s.addRange(r);toast("Selected. Press Ctrl+C to copy.")};
+    try{navigator.clipboard.writeText(text).then(ok,fallback)}catch{fallback()}});
+  return b}
+
+// click-to-edit for node and session names
+function editable(text,value,title,placeholder,save){
+  const el=h("span",{class:"nm edit",title},text);
+  el.addEventListener("click",e=>{stop(e);
+    const i=h("input",{class:"rename",value,placeholder,"aria-label":title});el.replaceWith(i);i.focus();i.select();
+    const done=ok=>{i.onblur=null;if(ok)save(i.value.trim());render()};
+    i.addEventListener("click",stop);
+    i.addEventListener("keydown",e=>{if(e.key==="Enter")done(true);if(e.key==="Escape")done(false)});
+    i.onblur=()=>done(false)});
+  return el}
+const nodeName=n=>editable(n.name,n.name,"Click to rename","node name",v=>{
+  if(!v||v===n.name)return;
+  for(const s of sessions)if(s.node===n.name)s.node=v;
+  if(sel.nodes.delete(n.name))sel.nodes.add(v);n.name=v;toast("Renamed to <b>"+v+"</b>")});
+const sessName=s=>editable(s.name||s.id,s.name,"Click to name this session (the name works as the ssh host)","name (ssh host)",v=>{
+  if(v===s.name)return;
+  if(v&&!/^[A-Za-z][A-Za-z0-9_.-]{0,62}$/.test(v)){toast("Names start with a letter and use letters, digits, _ . -","warn");return}
+  s.name=v;toast(v?`Named <b>${v}</b>. <code>ssh ${v}</code> works now.`:"Name cleared")});
+
+const dead=s=>s.agent==="dead";
+const live=s=>s.agent==="up";
+const onNode=n=>sessions.filter(s=>s.node===n.name);
+const cls=(kind,key)=>(sel[kind].has(key)?"sel ":"")+(cursor&&cursor.kind===kind&&cursor.key===key?"cursor":"");
+
+// ---------- nodes ----------
+function nodeStatus(n){
+  if(n.busy)return h("span",{class:"chip warn"},h("span",{class:"dot"}),h("span",{},n.busy));
+  if(n.ec2==="stopped")return h("button",{class:"chip idle",title:"Start the EC2 instance",onclick:e=>{stop(e);ec2(n,"start")}},
+    h("span",{class:"dot"}),h("span",{},"instance stopped"),h("span",{class:"go"},"▶ start"));
+  if(n.login)return h("button",{class:"chip bad",title:"Open Settings to add the node login",onclick:e=>{stop(e);toast("Opens <b>Settings → Node login</b>")}},
+    h("span",{class:"dot"}),h("span",{},"down: login missing"),h("span",{class:"go"},"fix →"));
+  return h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},"up"));
+}
+function loadCell(n){
+  if(!n.up)return h("span",{class:"hint"},"–");
+  // CPU load exactly as /proc/loadavg gives it: 1, 5 and 15 minute averages, then running/total tasks
+  return h("div",{class:"meta",style:"flex-direction:column;gap:.1rem"},
+    h("span",{class:n.avg[0]>n.cores?"hot":"",title:"/proc/loadavg: 1 min, 5 min, 15 min, running/total tasks"},"cpu ",
+      h("b",{},n.avg.map(x=>x.toFixed(2)).join(" ")+"  "+n.tasks)," · "+n.cores+" cores"),
+    h("span",{class:parseInt(n.disk)>=85?"hot":""},"disk / ",h("b",{},n.disk),n.data?["  /data ",h("b",{},n.data)]:null))}
+function sessCount(n){
+  const mine=onNode(n);if(!mine.length)return h("span",{class:"hint"},"–");
+  const l=mine.filter(live).length,d=mine.filter(dead).length;
+  return h("span",{class:"meta"},l?h("span",{},h("b",{},l)," running"):null,d?h("span",{class:"hot"},h("b",{},d)," not running"):null)}
+function renderNodes(){
+  const tb=$("#nodes tbody");tb.textContent="";
+  for(const n of nodes){
+    const row=h("tr",{"data-kind":"nodes","data-key":n.name,class:cls("nodes",n.name)});
+    const cb=h("input",{type:"checkbox","aria-label":"Select "+n.name});cb.checked=sel.nodes.has(n.name);
+    cb.addEventListener("change",()=>toggle("nodes",n.name,cb.checked));
+    const kebab=h("button",{class:"kebab","aria-label":"More actions for "+n.name,"aria-haspopup":"menu","aria-expanded":"false",onclick:e=>{stop(e);openMenu(e.currentTarget,"nodes",n.name)}},"⋯");
+    row.append(
+      h("td",{},cb),
+      h("td",{},nodeName(n),h("div",{},copyCmd(`ssh ${n.user}@${n.host}`)),h("div",{class:"sub"},n.iid+" · "+n.mode+" · src: "+n.src)),
+      h("td",{},nodeStatus(n)),
+      h("td",{},loadCell(n)),
+      h("td",{},n.up?h("div",{style:"display:flex;gap:.5rem"},h("a",{class:"lnk",href:"#"},"web"),h("a",{class:"lnk",href:"#"},"ssh")):h("span",{class:"hint"},"–")),
+      h("td",{},sessCount(n)),
+      h("td",{},kebab));
+    row.addEventListener("contextmenu",e=>{e.preventDefault();openMenuAt(e.clientX,e.clientY,"nodes",n.name)});
+    row.addEventListener("click",e=>{if(e.target.closest("button,a,input"))return;cursor={kind:"nodes",key:n.name};render()});
+    tb.append(row);
+  }
+  const off=nodes.filter(n=>n.ec2==="stopped").length;
+  $("#nodeHint").textContent=nodes.length+" nodes"+(off?` · ${off} instance stopped`:"");
+}
+
+// ---------- sessions ----------
+function agentChip(s){
+  if(s.removing)return h("span",{class:"chip warn"},h("span",{class:"dot"}),h("span",{},"removing…"));
+  if(s.agent==="starting")return h("span",{class:"chip warn"},h("span",{class:"dot"}),h("span",{},`starting… ${s.secs}s`));
+  if(live(s))return h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},"running"));
+  const label=s.state==="stopped"?"stopped":s.state==="needs_cleanup"?"cleanup pending":"NOT RUNNING";
+  return h("button",{class:"chip "+(s.state==="stopped"?"idle":"bad"),title:"Not doing anything. Click to remove it.",
+    onclick:e=>{stop(e);removeSessions([s])}},h("span",{class:"dot"}),h("span",{},label),h("span",{class:"go"},"✕ remove"))}
+function removeBtn(s){
+  const rm=h("button",{class:"btn danger mini",title:live(s)?"Stop the agent, revoke node access, remove":"Remove from the list"},"✕");
+  if(live(s))armButton(rm,"Stop & remove?",()=>removeSessions([s]));else rm.addEventListener("click",e=>{stop(e);removeSessions([s])});
+  return rm}
+function renderSessions(){
+  const tb=$("#sess tbody");tb.textContent="";
+  if(!sessions.length)tb.append(h("tr",{},h("td",{colspan:6,class:"hint",style:"text-align:center;padding:1rem"},"No AI sessions. Tick a node that is up and click Start session.")));
+  for(const s of sessions){
+    const row=h("tr",{"data-kind":"sess","data-key":s.id,class:cls("sess",s.id)});
+    const cb=h("input",{type:"checkbox","aria-label":"Select session "+s.id});cb.checked=sel.sess.has(s.id);
+    cb.addEventListener("change",()=>toggle("sess",s.id,cb.checked));
+    const opens=live(s)?[h("a",{class:"lnk",href:"#",onclick:e=>{e.preventDefault();toast("Opens <b>claude</b> in a new tab")}},"claude ↗"),
+                         h("a",{class:"lnk",href:"#",onclick:e=>{e.preventDefault();toast("Opens a shell in a new tab")}},"shell ↗")]:[];
+    const kebab=h("button",{class:"kebab","aria-label":"More actions for "+s.id,"aria-haspopup":"menu","aria-expanded":"false",onclick:e=>{stop(e);openMenu(e.currentTarget,"sess",s.id)}},"⋯");
+    row.append(
+      h("td",{},cb),
+      h("td",{},sessName(s),s.name?h("span",{class:"sub"}," "+s.id):null,live(s)?h("div",{},copyCmd(`ssh ${s.name||s.id}`)):null),
+      h("td",{},agentChip(s)),
+      h("td",{},live(s)?h("div",{class:"meta"},h("span",{},"cpu ",h("b",{},s.cpu)),h("span",{},"mem ",h("b",{},s.mem)),h("span",{},"ws ",h("b",{},s.ws))):h("span",{class:"hint"},"–")),
+      h("td",{},s.node),
+      h("td",{},h("div",{style:"display:flex;gap:.6rem;align-items:center;justify-content:flex-end"},...opens,s.removing||s.agent==="starting"?null:removeBtn(s),kebab)));
+    row.addEventListener("contextmenu",e=>{e.preventDefault();openMenuAt(e.clientX,e.clientY,"sess",s.id)});
+    row.addEventListener("click",e=>{if(e.target.closest("button,a,input"))return;cursor={kind:"sess",key:s.id};render()});
+    tb.append(row);
+  }
+  const n=sessions.filter(s=>dead(s)&&!s.removing).length;
+  const pb=$("#pruneBtn");pb.hidden=!n;pb.textContent=`Remove ${n} not running`;
+  $("#sessHint").textContent=sessions.filter(live).length+" running";
+}
+function render(){
+  renderNodes();renderSessions();renderBulk();
+  $("#ec2badge").textContent=sessions.filter(live).length;
+}
+
+// ---------- actions (simulated) ----------
+function ec2(n,action){
+  n.busy=action==="start"?"instance starting…":action==="stop"?"instance stopping…":"rebooting…";render();
+  setTimeout(()=>{n.busy=null;
+    if(action==="start"){Object.assign(n,{ec2:"running",up:true});n.avg=n.avg||[0.08,0.03,0.01];n.tasks=n.tasks||"1/310";n.cores=n.cores||8;n.disk=n.disk||"23%"}
+    if(action==="stop"){n.ec2="stopped";n.up=false;for(const s of sessions)if(s.node===n.name&&live(s))s.agent="dead"}
+    render();toast(`<b>${n.name}</b>: instance ${action==="reboot"?"rebooted":action==="start"?"running":"stopped"}`)},1400)}
+function startSessions(list){
+  list=list.filter(n=>n.up);
+  if(!list.length){toast("None of these nodes is up.","warn");return}
+  for(const n of list){
+    const id=Math.random().toString(16).slice(2,10);
+    const s={id,name:"",state:"starting",agent:"starting",secs:0,node:n.name};
+    sessions.push(s);
+    const t=setInterval(()=>{s.secs+=3;
+      if(s.secs>=9){clearInterval(t);Object.assign(s,{state:"running",agent:"up",cpu:"0.1%",mem:"96 MB",ws:"12 MB"});
+        toast(`Session <code>${id}</code> is running on <b>${s.node}</b>. Click its id to name it.`)}
+      render()},700)}
+  render()}
+function removeSessions(list){
+  list=list.filter(s=>!s.removing);if(!list.length)return;
+  list.forEach(s=>{s.removing=true;sel.sess.delete(s.id)});render();
+  setTimeout(()=>{
+    const left=[];
+    for(const s of list){const n=nodes.find(x=>x.name===s.node);if(!n||!n.up)left.push(`${s.id}/${s.node}`);sessions.splice(sessions.indexOf(s),1)}
+    render();
+    toast(`Removed ${list.length} session${list.length>1?"s":""}.`+(left.length?`<br>Key and sudo rule may remain on <code>${left.join(", ")}</code>; airlock sweep removes them once the node is back.`:""),left.length?"warn":"")
+  },700)}
+function deleteNodes(list){
+  const busy=list.filter(n=>sessions.some(s=>live(s)&&s.node===n.name));
+  const free=list.filter(n=>!busy.includes(n));
+  const stale=sessions.filter(s=>dead(s)&&free.some(n=>n.name===s.node));
+  stale.forEach(s=>sessions.splice(sessions.indexOf(s),1));
+  free.forEach(n=>{nodes.splice(nodes.indexOf(n),1);sel.nodes.delete(n.name)});
+  render();
+  if(free.length)toast(`Deleted ${free.map(n=>"<b>"+n.name+"</b>").join(", ")} from the list`+(stale.length?` and ${stale.length} dead session${stale.length>1?"s":""} on ${free.length>1?"them":"it"}`:"")+".");
+  if(busy.length)toast(`Kept ${busy.map(n=>"<b>"+n.name+"</b>").join(", ")}: a running AI session uses it. Remove the session first.`,"warn")}
+
+// ---------- selection + bulk bar ----------
+function toggle(kind,key,on){on?sel[kind].add(key):sel[kind].delete(key);
+  if(on)sel[kind==="nodes"?"sess":"nodes"].clear();   // one table at a time, so the bar is never ambiguous
+  render()}
+function renderBulk(){
+  const bar=$("#bulk");bar.textContent="";
+  const kind=sel.nodes.size?"nodes":sel.sess.size?"sess":null;
+  bar.hidden=!kind;if(!kind)return;
+  if(kind==="nodes"){
+    const list=nodes.filter(n=>sel.nodes.has(n.name)),n=list.length;
+    const up=list.filter(x=>x.up),off=list.filter(x=>x.ec2==="stopped"),on=list.filter(x=>x.ec2!=="stopped");
+    bar.append(h("span",{class:"count"},`${n} node${n>1?"s":""}`),tag("D"),
+      h("button",{class:"btn primary",disabled:!up.length,title:"One session on each ticked node that is up",onclick:()=>{startSessions(up);sel.nodes.clear();render()}},
+        up.length>1?`Start ${up.length} sessions`:"Start session"),
+      h("button",{class:"btn",disabled:!off.length,onclick:()=>off.forEach(x=>ec2(x,"start"))},"Start instance"),
+      h("button",{class:"btn",disabled:!on.length,onclick:()=>on.forEach(x=>ec2(x,"reboot"))},"Reboot"));
+    const stopI=h("button",{class:"btn danger",disabled:!on.length},"Stop instance");armButton(stopI,"Stop "+on.length+"?",()=>on.forEach(x=>ec2(x,"stop")));
+    const del=h("button",{class:"btn danger"},"Delete");armButton(del,"Delete "+n+"?",()=>deleteNodes(list));
+    bar.append(stopI,del);
+  }else{
+    const list=sessions.filter(s=>sel.sess.has(s.id)),lv=list.filter(live);
+    bar.append(h("span",{class:"count"},`${list.length} session${list.length>1?"s":""}`),tag("D"));
+    const rm=h("button",{class:"btn danger"},"Stop & remove");
+    if(lv.length)armButton(rm,`Stop ${lv.length} running & remove?`,()=>removeSessions(list));else rm.addEventListener("click",()=>removeSessions(list));
+    bar.append(rm,h("button",{class:"btn",disabled:!lv.length,onclick:()=>{lv.forEach(s=>{s.agent="dead";s.state="stopped"});sel.sess.clear();render();toast("Stopped. The rows stay so you can look at the workspace.")}},"Stop only"));
+  }
+  bar.append(h("button",{class:"x","aria-label":"Clear selection",onclick:()=>{sel.nodes.clear();sel.sess.clear();render()}},"×"));
+}
+
+// ---------- menu (kebab and right-click share it) ----------
+let menuFor=null;
+const clickIn=(kind,key,sub)=>()=>document.querySelector(`tr[data-kind="${kind}"][data-key="${key}"] ${sub}`)?.click();
+function menuItems(kind,key){
+  if(sel[kind].has(key)&&sel[kind].size>1)return null;   // several ticked: the bar handles them
+  if(kind==="nodes"){const n=nodes.find(x=>x.name===key);return [
+    ["Start session","s",()=>startSessions([n]),"",!n.up],
+    ["Rename","",clickIn(kind,key,".nm")],
+    ["Source folders…","",()=>toast("Opens the source folders page for <b>"+n.name+"</b>")],
+    "—",
+    ...["ssh","ssh_sudo","direct"].map(m=>[(n.mode===m?"● ":"○ ")+"exec: "+m,"",()=>{n.mode=m;render();toast(`${n.name}: exec mode ${m}`)}]),
+    "—",
+    n.ec2==="stopped"?["Start instance","",()=>ec2(n,"start")]:["Reboot instance","",()=>ec2(n,"reboot")],
+    n.ec2!=="stopped"&&["Stop instance","",()=>ec2(n,"stop"),"danger"],
+    ["Delete from list","",()=>deleteNodes([n]),"danger"]].filter(Boolean)}
+  const s=sessions.find(x=>x.id===key);return [
+    live(s)&&["Open claude","Enter",()=>toast("Opens <b>claude</b> in a new tab")],
+    live(s)&&["Open shell","",()=>toast("Opens a shell in a new tab")],
+    ["Name this session","",clickIn(kind,key,".nm")],
+    "—",
+    live(s)&&["Stop only","",()=>{s.agent="dead";s.state="stopped";render()}],
+    [live(s)?"Stop & remove":"Remove","Del",()=>removeSessions([s]),"danger"]].filter(Boolean)}
+function openMenuAt(x,y,kind,key,anchor){
+  const m=$("#menu"),items=menuItems(kind,key);m.textContent="";
+  m.append(h("div",{class:"hd"},items?key:`${sel[kind].size} selected`),tag("C"));
+  if(!items)m.append(h("div",{style:"padding:.3rem .6rem;color:var(--muted)"},"Use the bar at the bottom for the ticked rows."));
+  for(const it of items||[]){
+    if(it==="—"){m.append(h("hr"));continue}
+    const [label,k,fn,c,dis]=it;
+    m.append(h("button",{role:"menuitem",class:c||"",disabled:!!dis,onclick:e=>{stop(e);closeMenu(true);fn()}},h("span",{},label),h("span",{class:"k"},k)))}
+  m.hidden=false;
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.max(8,Math.min(x,innerWidth-r.width-8))+"px";m.style.top=Math.max(8,(y+r.height>innerHeight-8?y-r.height:y))+"px";
+  menuFor=anchor||null;if(anchor)anchor.setAttribute("aria-expanded","true");
+  m.querySelector("button:not(:disabled)")?.focus();
+}
+function openMenu(btn,kind,key){const r=btn.getBoundingClientRect();openMenuAt(r.right-210,r.bottom+4,kind,key,btn)}
+function closeMenu(keepFocus){$("#menu").hidden=true;if(menuFor){menuFor.setAttribute("aria-expanded","false");if(!keepFocus)menuFor.focus()}menuFor=null}
+document.addEventListener("click",e=>{if(!e.target.closest("#menu"))closeMenu(true)});
+addEventListener("scroll",()=>closeMenu(true),true);
+
+// ---------- keyboard ----------
+document.addEventListener("keydown",e=>{
+  if(e.target.closest("input:not([type=checkbox])"))return;
+  if(e.key==="Escape"){if(!$("#menu").hidden)closeMenu();else if(!$("#help").hidden)$("#help").hidden=true;else{sel.nodes.clear();sel.sess.clear();render()}return}
+  if(!$("#menu").hidden){const items=[...$("#menu").querySelectorAll("button:not(:disabled)")],i=items.indexOf(document.activeElement);
+    if(e.key==="ArrowDown"){e.preventDefault();items[(i+1)%items.length]?.focus()}
+    if(e.key==="ArrowUp"){e.preventDefault();items[(i-1+items.length)%items.length]?.focus()}return}
+  if(e.key==="?"){$("#help").hidden=false;$("#helpClose").focus();return}
+  const rows=[...document.querySelectorAll("tbody tr[data-key]")];if(!rows.length)return;
+  let i=cursor?rows.findIndex(r=>r.dataset.kind===cursor.kind&&r.dataset.key===cursor.key):-1;
+  const go=j=>{cursor={kind:rows[j].dataset.kind,key:rows[j].dataset.key};render();document.querySelector(`tr[data-kind="${cursor.kind}"][data-key="${cursor.key}"]`)?.scrollIntoView({block:"nearest"})};
+  if(e.key==="j"){go(Math.min(rows.length-1,i+1));return}
+  if(e.key==="k"){go(Math.max(0,i-1));return}
+  if(e.key==="s"&&sel.nodes.size){startSessions(nodes.filter(n=>sel.nodes.has(n.name)));sel.nodes.clear();render();return}
+  if(i<0)return;const row=rows[i],{kind,key}=row.dataset;
+  if(e.key==="x"){toggle(kind,key,!sel[kind].has(key));return}
+  if(e.key==="m"){openMenu(row.querySelector(".kebab"),kind,key);return}
+  if(e.key==="s"&&kind==="nodes"){startSessions([nodes.find(n=>n.name===key)]);return}
+  if(e.key==="Enter"&&e.target===document.body&&kind==="sess"){row.querySelector(".lnk")?.click();return}
+  if((e.key==="Delete"||e.key==="Backspace")&&kind==="sess"){(row.querySelector(".btn.danger")||row.querySelector("button.chip"))?.click()}
+});
+
+// ---------- wiring ----------
+$("#nall").addEventListener("change",e=>{sel.sess.clear();nodes.forEach(n=>e.target.checked?sel.nodes.add(n.name):sel.nodes.delete(n.name));render()});
+$("#sall").addEventListener("change",e=>{sel.nodes.clear();sessions.forEach(s=>e.target.checked?sel.sess.add(s.id):sel.sess.delete(s.id));render()});
+$("#pruneBtn").addEventListener("click",()=>removeSessions(sessions.filter(dead)));
+$("#notesToggle").addEventListener("change",e=>document.body.classList.toggle("shownotes",e.target.checked));
+$("#helpClose").addEventListener("click",()=>$("#help").hidden=true);
+$("#addNode").addEventListener("click",()=>toast("Opens the add-node form inline"));
+$("#importAws").addEventListener("click",()=>toast("Opens the AWS import page"));
+render();
+</script>
+<script>
+// ================= PROD and Settings views (same patterns as EC2) =================
+const clusters=[
+  {name:"staging",ctx:"staging",up:true,nodes:6,lat:"38 ms",tools:{kubernetes:"read",kubectl_commands:"read",slack:"read",jira:"off",django:"off"},secrets:1},
+  {name:"production",ctx:"production",up:true,nodes:24,lat:"61 ms",tools:{kubernetes:"approve_writes",jira:"read",django:"read",slack:"off",kubectl_commands:"read"},secrets:2},
+  {name:"prod-eu",ctx:"prod-eu",up:false,err:"context token expired",tools:{kubernetes:"read",jira:"off",django:"off",slack:"off",kubectl_commands:"off"},secrets:0},
+];
+const psessions=[
+  {id:"c9d4e612",name:"checkout-latency",agent:"up",calls:42,writes:1,env:"production"},
+  {id:"4b17aa03",name:"",agent:"dead",state:"needs_cleanup",env:"staging"},
+];
+const waiting=[
+  {id:"w1",kind:"call",env:"production",sess:"c9d4e612",when:"16:06",what:"kubernetes.rollout_restart",args:'{"namespace":"shop","deployment":"checkout-api"}'},
+  {id:"w2",kind:"access",env:"production",sess:"c9d4e612",when:"16:07",what:"New query: slow_checkouts_last_hour",args:"Checkouts slower than N ms in the last hour, by payment provider"},
+];
+const folders=[
+  {path:"~/src/shop-api",mode:"ro",on:true},
+  {path:"~/src/infra",mode:"ro",on:true},
+  {path:"~/src/shared-lib",mode:"rw",on:false},
+];
+let signin=true,login="jdoe";
+const psel={clusters:new Set(),psess:new Set()};
+let view="ec2";
+
+const pDead=s=>s.agent==="dead",pLive=s=>s.agent==="up";
+const toolNext={off:"read",read:"approve_writes",approve_writes:"off"};
+
+function renderWaiting(){
+  const box=$("#waiting");box.textContent="";
+  $("#waitHint").textContent=waiting.length?`${waiting.length} item${waiting.length>1?"s":""}`:"";
+  if(!waiting.length){box.append(h("div",{class:"hint",style:"padding:.6rem;border:1px dashed var(--line);border-radius:8px"},"Nothing is waiting. Write calls and new access requests show up here."));}
+  for(const w of waiting){
+    const done=(msg,kind)=>{waiting.splice(waiting.indexOf(w),1);renderProd();toast(msg,kind)};
+    const rej=h("button",{class:"btn danger"},"Reject");armButton(rej,"Reject?",()=>done("Rejected. The agent gets a refusal.","warn"));
+    box.append(h("div",{style:"display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;border:1px solid var(--line);border-left:4px solid var(--prod);border-radius:8px;padding:.55rem .8rem"},
+      h("div",{style:"min-width:0;flex:1 1 20rem"},
+        h("div",{},h("b",{},w.what),h("span",{class:"chip "+(w.kind==="call"?"warn":"idle"),style:"margin-left:.5rem"},h("span",{class:"dot"}),h("span",{},w.kind==="call"?"write, agent is waiting":"new access"))),
+        h("div",{class:"sub",style:"overflow-wrap:anywhere"},w.args),
+        h("div",{class:"hint"},`${w.env} · session ${w.sess} · ${w.when}`)),
+      h("div",{style:"display:flex;gap:.4rem;flex-wrap:wrap"},
+        h("button",{class:"btn primary",onclick:()=>done(w.kind==="call"?"Approved this call.":"Approved. Enabled for every later session in "+w.env+".")},"Approve"),
+        w.kind==="call"?h("button",{class:"btn",onclick:()=>done("Approved this and later calls of "+w.what+" for session "+w.sess+".")},"For this session"):null,
+        rej)));
+  }
+  document.querySelector('nav a[data-view="prod"] .badge').textContent=psessions.filter(pLive).length+(waiting.length?` · ${waiting.length}⏳`:"");
+}
+function renderClusters(){
+  const tb=$("#clusters tbody");tb.textContent="";
+  for(const c of clusters){
+    const row=h("tr",{class:psel.clusters.has(c.name)?"sel":""});
+    const cb=h("input",{type:"checkbox","aria-label":"Select "+c.name});cb.checked=psel.clusters.has(c.name);
+    cb.addEventListener("change",()=>{cb.checked?(psel.clusters.add(c.name),psel.psess.clear()):psel.clusters.delete(c.name);renderProd()});
+    const name=editable(c.name,c.name,"Click to rename","cluster name",v=>{if(v&&v!==c.name){psessions.forEach(s=>{if(s.env===c.name)s.env=v});c.name=v;toast("Renamed to <b>"+v+"</b>")}renderProd()});
+    const status=c.up?h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},`up · ${c.nodes} nodes · ${c.lat}`))
+      :h("button",{class:"chip bad",title:"Refresh the kubectl credentials",onclick:e=>{stop(e);c.up=true;c.nodes=9;c.lat="44 ms";delete c.err;renderProd();toast("<b>"+c.name+"</b>: new token, reachable")}},
+          h("span",{class:"dot"}),h("span",{},c.err),h("span",{class:"go"},"↻ refresh"));
+    const tools=h("div",{style:"display:flex;flex-wrap:wrap;gap:.25rem"});
+    for(const [t,lvl] of Object.entries(c.tools))
+      tools.append(h("button",{class:"chip "+(lvl==="off"?"idle":lvl==="read"?"ok":"warn"),title:"Click to cycle: off → read → approve_writes",
+        onclick:e=>{stop(e);c.tools[t]=toolNext[lvl];renderProd();toast(`${c.name}: <b>${t}</b> ${c.tools[t]}`)}},h("span",{class:"dot"}),h("span",{},t+(lvl==="off"?"":": "+lvl.replace("_"," ")))));
+    const mine=psessions.filter(s=>s.env===c.name);
+    const kebab=h("button",{class:"kebab","aria-label":"More actions for "+c.name,onclick:e=>{stop(e);clusterMenu(e.currentTarget,c)}},"⋯");
+    row.append(h("td",{},cb),
+      h("td",{},name,h("div",{class:"sub"},"context "+c.ctx+" · secrets "+c.secrets)),
+      h("td",{},status),h("td",{},tools),
+      h("td",{},h("a",{class:"lnk",href:"#"},"grafana")),
+      h("td",{},mine.length?h("span",{class:"meta"},h("span",{},h("b",{},mine.filter(pLive).length)," running"),mine.some(pDead)?h("span",{class:"hot"},h("b",{},mine.filter(pDead).length)," not running"):null):h("span",{class:"hint"},"–")),
+      h("td",{},kebab));
+    row.addEventListener("contextmenu",e=>{e.preventDefault();clusterMenu(null,c,e.clientX,e.clientY)});
+    tb.append(row);
+  }
+}
+function clusterMenu(btn,c,x,y){
+  const m=$("#menu");m.textContent="";m.append(h("div",{class:"hd"},c.name),tag("C"));
+  const item=(label,fn,cls,dis)=>m.append(h("button",{role:"menuitem",class:cls||"",disabled:!!dis,onclick:e=>{stop(e);closeMenu(true);fn()}},h("span",{},label),h("span",{class:"k"},"")));
+  item("Start session",()=>pStart([c]),"",!c.up);
+  item("Set secret…",()=>toast("Opens an inline secret field (value never shown again)"));
+  item("Refresh kubectl token",()=>toast("New token for <b>"+c.name+"</b>"));
+  m.append(h("hr"));
+  item("Remove from list",()=>{if(psessions.some(s=>s.env===c.name&&pLive(s))){toast("A running session uses <b>"+c.name+"</b>. Remove it first.","warn");return}
+    clusters.splice(clusters.indexOf(c),1);renderProd();toast("Removed <b>"+c.name+"</b>")},"danger");
+  m.hidden=false;const r=m.getBoundingClientRect();
+  if(btn){const b=btn.getBoundingClientRect();x=b.right-210;y=b.bottom+4}
+  m.style.left=Math.max(8,Math.min(x,innerWidth-r.width-8))+"px";m.style.top=Math.max(8,(y+r.height>innerHeight-8?y-r.height:y))+"px";
+  m.querySelector("button:not(:disabled)")?.focus();
+}
+function renderPsess(){
+  const tb=$("#psess tbody");tb.textContent="";
+  if(!psessions.length)tb.append(h("tr",{},h("td",{colspan:6,class:"hint",style:"text-align:center;padding:1rem"},"No PROD sessions. Tick a cluster and click Start session.")));
+  for(const s of psessions){
+    const row=h("tr",{class:psel.psess.has(s.id)?"sel":""});
+    const cb=h("input",{type:"checkbox","aria-label":"Select session "+s.id});cb.checked=psel.psess.has(s.id);
+    cb.addEventListener("change",()=>{cb.checked?(psel.psess.add(s.id),psel.clusters.clear()):psel.psess.delete(s.id);renderProd()});
+    const chip=s.removing?h("span",{class:"chip warn"},h("span",{class:"dot"}),h("span",{},"removing…"))
+      :s.agent==="starting"?h("span",{class:"chip warn"},h("span",{class:"dot"}),h("span",{},`starting… ${s.secs}s`))
+      :pLive(s)?h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},"running"))
+      :h("button",{class:"chip bad",onclick:e=>{stop(e);pRemove([s])}},h("span",{class:"dot"}),h("span",{},s.state==="needs_cleanup"?"cleanup pending":"NOT RUNNING"),h("span",{class:"go"},"✕ remove"));
+    const rm=h("button",{class:"btn danger mini"},"✕");
+    if(pLive(s))armButton(rm,"Stop & remove?",()=>pRemove([s]));else rm.addEventListener("click",e=>{stop(e);pRemove([s])});
+    const name=editable(s.name||s.id,s.name,"Click to name this session","name (ssh host)",v=>{s.name=v;renderProd()});
+    row.append(h("td",{},cb),
+      h("td",{},name,s.name?h("span",{class:"sub"}," "+s.id):null,pLive(s)?h("div",{},copyCmd("ssh "+(s.name||s.id))):null),
+      h("td",{},chip),
+      h("td",{},pLive(s)?h("span",{class:"meta"},h("span",{},h("b",{},s.calls)," calls"),h("span",{},h("b",{},s.writes)," writes"),h("a",{class:"lnk",href:"#"},"live log ↗")):h("span",{class:"hint"},"–")),
+      h("td",{},s.env),
+      h("td",{},h("div",{style:"display:flex;gap:.6rem;align-items:center;justify-content:flex-end"},
+        ...(pLive(s)?[h("a",{class:"lnk",href:"#"},"claude ↗"),h("a",{class:"lnk",href:"#"},"shell ↗")]:[]),s.removing||s.agent==="starting"?null:rm)));
+    tb.append(row);
+  }
+  const n=psessions.filter(s=>pDead(s)&&!s.removing).length;
+  const pb=$("#ppruneBtn");pb.hidden=!n;pb.textContent=`Remove ${n} not running`;
+  $("#psessHint").textContent=psessions.filter(pLive).length+" running";
+}
+function pStart(list){
+  list=list.filter(c=>c.up);if(!list.length){toast("None of these clusters is reachable.","warn");return}
+  for(const c of list){
+    const s={id:Math.random().toString(16).slice(2,10),name:"",agent:"starting",secs:0,calls:0,writes:0,env:c.name};psessions.push(s);
+    const t=setInterval(()=>{s.secs+=3;if(s.secs>=9){clearInterval(t);s.agent="up";toast(`PROD session <code>${s.id}</code> is running on <b>${c.name}</b>`)}renderProd()},700)}
+  renderProd()}
+function pRemove(list){
+  list=list.filter(s=>!s.removing);if(!list.length)return;
+  list.forEach(s=>{s.removing=true;psel.psess.delete(s.id)});renderProd();
+  setTimeout(()=>{list.forEach(s=>psessions.splice(psessions.indexOf(s),1));renderProd();toast(`Removed ${list.length} session${list.length>1?"s":""}.`)},700)}
+function renderProdBulk(){
+  if(view!=="prod")return;
+  const bar=$("#bulk");bar.textContent="";
+  const kind=psel.clusters.size?"clusters":psel.psess.size?"psess":null;
+  bar.hidden=!kind;if(!kind)return;
+  if(kind==="clusters"){
+    const list=clusters.filter(c=>psel.clusters.has(c.name)),up=list.filter(c=>c.up);
+    bar.append(h("span",{class:"count"},`${list.length} cluster${list.length>1?"s":""}`),tag("D"),
+      h("button",{class:"btn primary",disabled:!up.length,onclick:()=>{pStart(up);psel.clusters.clear();renderProd()}},up.length>1?`Start ${up.length} sessions`:"Start session"),
+      h("button",{class:"btn",onclick:()=>toast("New kubectl tokens for "+list.length+" cluster(s)")},"Refresh tokens"));
+  }else{
+    const list=psessions.filter(s=>psel.psess.has(s.id)),lv=list.filter(pLive);
+    const rm=h("button",{class:"btn danger"},"Stop & remove");
+    if(lv.length)armButton(rm,`Stop ${lv.length} running & remove?`,()=>pRemove(list));else rm.addEventListener("click",()=>pRemove(list));
+    bar.append(h("span",{class:"count"},`${list.length} session${list.length>1?"s":""}`),tag("D"),rm);
+  }
+  bar.append(h("button",{class:"x","aria-label":"Clear selection",onclick:()=>{psel.clusters.clear();psel.psess.clear();renderProd()}},"×"));
+}
+function renderProd(){renderWaiting();renderClusters();renderPsess();renderProdBulk()}
+
+// ---------- Settings ----------
+function renderConfig(){
+  const si=$("#signin");si.textContent="";
+  si.append(signin?h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},"automatic sign-in is on · token saved")):h("span",{class:"chip idle"},h("span",{class:"dot"}),h("span",{},"off: each session asks you to log in")));
+  if(signin){const b=h("button",{class:"btn danger"},"Remove token");armButton(b,"Remove token?",()=>{signin=false;renderConfig();toast("Token removed. New sessions ask you to log in.")});si.append(b)}
+  else si.append(h("button",{class:"btn primary",onclick:()=>{signin=true;renderConfig();toast("Token saved")}},"Paste token…"));
+  const nl=$("#nodelogin");nl.textContent="";
+  nl.append(login?h("span",{class:"chip ok"},h("span",{class:"dot"}),h("span",{},"login set for user "+login)):h("button",{class:"chip bad",onclick:()=>{login="jdoe";renderConfig();toast("Login set")}},h("span",{class:"dot"}),h("span",{},"login missing: sessions on ssh_sudo nodes fail"),h("span",{class:"go"},"set →")));
+  if(login)nl.append(h("button",{class:"btn",onclick:()=>{login="";renderConfig();toast("Login forgotten")}},"Forget login"));
+  const tb=$("#folders tbody");tb.textContent="";
+  for(const f of folders){
+    const base=f.path.split("/").pop();
+    tb.append(h("tr",{style:f.on?"":"opacity:.6"},
+      h("td",{},h("span",{class:"sub",style:"color:var(--fg)"},f.path)),
+      h("td",{},h("span",{class:"sub"},"/src/"+base)),
+      h("td",{},h("button",{class:"chip "+(f.mode==="rw"?"warn":"ok"),title:"Click to switch. Read-write applies to EC2 sessions only; PROD is always read-only.",
+        onclick:()=>{f.mode=f.mode==="rw"?"ro":"rw";renderConfig()}},h("span",{class:"dot"}),h("span",{},f.mode==="rw"?"read-write (EC2)":"read-only"))),
+      h("td",{},h("input",{type:"checkbox","aria-label":"Mount "+f.path,checked:f.on,onchange:e=>{f.on=e.target.checked;renderConfig()}})),
+      h("td",{style:"text-align:right"},h("button",{class:"btn danger mini",title:"Remove from the list",onclick:()=>{folders.splice(folders.indexOf(f),1);renderConfig();toast("Removed "+f.path)}},"✕"))));
+  }
+}
+$("#addFolder").addEventListener("submit",e=>{e.preventDefault();const v=$("#folderPath").value.trim();if(!v)return;
+  if(/(^|\/)\.(ssh|aws|kube)(\/|$)/.test(v)){toast("Refused: "+v+" overlaps a credential folder.","warn");return}
+  folders.push({path:v,mode:"ro",on:true});$("#folderPath").value="";renderConfig();toast("Added "+v+" (read-only)")});
+
+// ---------- view switching ----------
+document.addEventListener("keydown",e=>{if(view!=="ec2"&&!["Escape","?"].includes(e.key))e.stopImmediatePropagation()},true);
+function showView(v){
+  view=v;
+  for(const id of ["ec2","prod","config"])document.getElementById("v-"+id).hidden=id!==v;
+  document.querySelectorAll("nav a[data-view]").forEach(a=>a.classList.toggle("on",a.dataset.view===v));
+  sel.nodes.clear();sel.sess.clear();psel.clusters.clear();psel.psess.clear();cursor=null;closeMenu(true);
+  if(v==="ec2")render();else{$("#bulk").hidden=true;v==="prod"?renderProd():renderConfig()}
+  scrollTo(0,0);
+}
+const origRender=render;
+render=function(){if(view==="ec2")origRender()};
+document.querySelectorAll("nav a[data-view]").forEach(a=>a.addEventListener("click",e=>{e.preventDefault();history.replaceState(null,"","#"+a.dataset.view);showView(a.dataset.view)}));
+$("#call").addEventListener("change",e=>{psel.psess.clear();clusters.forEach(c=>e.target.checked?psel.clusters.add(c.name):psel.clusters.delete(c.name));renderProd()});
+$("#psall").addEventListener("change",e=>{psel.clusters.clear();psessions.forEach(s=>e.target.checked?psel.psess.add(s.id):psel.psess.delete(s.id));renderProd()});
+$("#ppruneBtn").addEventListener("click",()=>pRemove(psessions.filter(pDead)));
+addEventListener("hashchange",()=>{const v=location.hash.slice(1);if(["ec2","prod","config"].includes(v))showView(v)});
+renderWaiting();
+{const v=location.hash.slice(1);if(["prod","config"].includes(v))showView(v)}
+</script>

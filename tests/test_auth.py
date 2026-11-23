@@ -108,13 +108,15 @@ def ui_client(tmp_path, monkeypatch):
 def test_ui_shows_status_and_saves_the_token_without_echoing_it(tmp_path, monkeypatch):
     c = ui_client(tmp_path, monkeypatch)
     page = c.get("/settings").text
-    assert "not set up" in page and "claude setup-token" in page and 'type=password name=token' in page
+    assert "each session asks you to log in" in page and "claude setup-token" in page and 'type=password name=token' in page
+    assert "Paste token" in page and "confirm(" not in page
     r = c.post("/auth/claude-token", data={"token": TOKEN})
     assert "automatic sign-in is on" in r.text and TOKEN not in r.text and "Remove token" in r.text
+    assert 'data-arm="Remove the saved token?"' in r.text                                # two clicks, no confirm()
     f = tmp_path / "secrets" / "claude_oauth_token"
     assert f.read_text().strip() == TOKEN and stat.S_IMODE(f.stat().st_mode) == 0o600
     assert TOKEN not in c.get("/settings").text                                           # never rendered back, not even in a value attribute
-    assert "not set up" in c.post("/auth/claude-token/remove").text and not f.exists()
+    assert "each session asks you to log in" in c.post("/auth/claude-token/remove").text and not f.exists()
 
 
 def test_ui_rejects_a_bad_token_and_explains(tmp_path, monkeypatch):

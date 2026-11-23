@@ -86,13 +86,13 @@ def test_json_config_supported(tmp_path):
     assert [n.name for n in C.load_config(p).nodes] == ["A", "B"]
 
 
-def fake_session(sid, status, nodes=("JohnTestApi",), tmp=None):
+def fake_session(sid, status, nodes=("JohnTestApi",), tmp=None, **kw):
     d = session.SESSIONS / sid
     d.mkdir(parents=True)
     ws = tmp / f"ws-{sid}"
     ws.mkdir()
     (ws / "AIRLOCK_NODES.md").write_text("x")
-    session.save_state({"id": sid, "status": status, "nodes": list(nodes), "workspace": str(ws)})
+    session.save_state({"id": sid, "status": status, "nodes": list(nodes), "workspace": str(ws), **kw})
     return d, ws
 
 
@@ -118,7 +118,7 @@ def test_prune_removes_only_stopped(cfgfile, tmp_path):
 
 def test_node_in_use_cannot_be_removed(cfgfile, tmp_path):
     fake_session("bbbbbb22", "running", tmp=tmp_path)
-    with pytest.raises(C.ConfigError, match="stop sessions first"):
+    with pytest.raises(C.ConfigError, match="Stop & remove the session first"):
         session.remove_node_checked(cfgfile, "JohnTestApi")
     session.edit_meta_checked(cfgfile, ["JohnTestApi"], add_labels=["ok"])      # labels are harmless
     session.remove_node_checked(cfgfile, "JaneTestGateway")                      # unrelated node is free
@@ -207,7 +207,9 @@ def test_ui_group_delete_and_stats_endpoint(cfgfile, tmp_path, monkeypatch):
     fake_session("bbbbbb22", "running", tmp=tmp_path)
     c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800", follow_redirects=True)
     page = c.get("/").text
-    assert page.count('name=ssel value=') == 4 and 'id=all' in page and "Delete selected" in page and "data-f=cpu" in page
+    assert page.count('class=rowsel name=ssel value=') == 4 and 'data-for=sess' in page and "Stop &amp; remove" in page and "data-f=cpu" in page
+    assert page.count("✕ remove</span></button>") == 3 and "Force discard" not in page and "confirm(" not in page   # dead rows: one-click chip
+    assert page.count(" data-rm>") == 4                                       # and a ✕ in every row
     assert c.get("/api/sessions/stats").json()["aaaaaa11"]["workspace"] == "1 KB"
     c.post("/sessions/bulk-delete", data={"ssel": ["aaaaaa11", "aaaaaa22", "bbbbbb22"]})
     assert stopped == ["bbbbbb22"]                                           # the running one was stopped first, then deleted
@@ -232,7 +234,9 @@ def test_nodestats_parse():
     assert r["disks"][0]["used"] == 83886080 * 1024
     same = LOADAVG.replace("/dev/nvme1n1 524288000", "/dev/nvme0n1p1 209612800")   # /data on the same filesystem as /
     assert len(nodestats.parse(same)["disks"]) == 1
-    assert nodestats.parse("garbage\n") == {"load1": None, "cores": None, "disks": []}
+    assert (r["load5"], r["load15"], r["tasks"]) == (3.38, 3.44, "4/1873")       # the whole /proc/loadavg line
+    assert nodestats.parse("garbage\n") == {"load1": None, "load5": None, "load15": None, "tasks": None, "cores": None, "disks": []}
+    assert nodestats.parse("1.0 2.0 3.0 <b>/1 9\n")["tasks"] is None                # node text: plain values only
 
 
 def test_nodestats_collect_caches_and_reports_failures(cfgfile, monkeypatch):
@@ -272,21 +276,23 @@ def test_ui_nodes_page_has_checkboxes_links_and_no_delete_buttons(cfgfile, monke
     page = c.get("/").text
     assert 'href="https://w.example"' in page and "javascript:alert" not in page     # only http(s) links are rendered
     assert 'href="ssh://10.0.1.11"' in page and "dev instance #1" in page
-    assert page.count("name=sel value=") == 2 and "Delete selected" in page
-    assert ">Remove<" not in page and ">Delete<" not in page                          # no per-row delete buttons
+    assert page.count("class=rowsel name=sel value=") == 2 and "/nodes/bulk-delete" in page
+    assert "<select name=cmd" not in page and ">Apply<" not in page                    # no drop list + Apply (UI_REFACTOR_SPEC 10.1)
     assert c.get("/api/nodes/stats").json()["JohnTestApi"]["load1"] == 1.0
 
 
 def test_remove_nodes_checked_skips_busy(cfgfile, tmp_path):
     fake_session("bbbbbb22", "running", tmp=tmp_path)
-    with pytest.raises(C.ConfigError, match=r"deleted 1; not deleted .*JohnTestApi \(session bbbbbb22\)"):
+    with pytest.raises(C.ConfigError, match=r"deleted 1; not deleted, .*JohnTestApi \(session bbbbbb22\)"):
         session.remove_nodes_checked(cfgfile, ["JohnTestApi", "JaneTestGateway"])
     assert [n.name for n in C.load_config(cfgfile).nodes] == ["JohnTestApi"]
     with pytest.raises(C.ConfigError, match="at least one"):
         session.remove_nodes_checked(cfgfile, [])
 
 
-def test_start_buttons_live_in_node_rows(cfgfile, monkeypatch):
+def test_start_is_in_the_row_menu_and_the_bulk_bar_not_in_the_row(cfgfile, monkeypatch):
+    import re
+
     from starlette.testclient import TestClient
 
     import airlock.ui as ui
@@ -296,14 +302,32 @@ def test_start_buttons_live_in_node_rows(cfgfile, monkeypatch):
     monkeypatch.setattr(session, "start_session", lambda cfg, names, **kw: started.append(list(names)) or {"id": "x"})
     c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800", follow_redirects=True)
     page = c.get("/").text
-    assert "Start Sandbox session" not in page                                   # the old section is gone
-    for n in ("JohnTestApi", "JaneTestGateway"):                                  # one Start form per node row
-        assert f'<input type=hidden name=nodes value="{n}">' in page
-    assert page.count(">Start</button>") == 2 and "Start session on selected" in page
-    c.post("/sessions", data={"nodes": "JohnTestApi"})                            # row button: one node
-    c.post("/sessions", data={"sel": ["JohnTestApi", "JaneTestGateway"]})         # selected rows: one session on both
-    assert started == [["JohnTestApi"], ["JohnTestApi", "JaneTestGateway"]]
+    for n in ("JohnTestApi", "JaneTestGateway"):                                  # "Start session" lives in the row's menu
+        row = re.search(rf'<tr data-kind=nodes data-key="{n}".*?</tr>', page, re.S).group(0)
+        menu = row.split("class=menu")[1]
+        assert f'formaction="/sessions" name="nodes" value="{n}"' in menu and "data-need=\"up\"" in menu
+        assert ">Start</button>" not in row and "<select" not in row               # no Start button and no exec select in the row
+    assert 'data-labeln="Start {n} sessions"' in page                             # the bulk bar
+    c.post("/sessions", data={"nodes": "JohnTestApi"})                            # the menu: one node
+    c.post("/sessions", data={"sel": ["JohnTestApi", "JaneTestGateway"]})         # ticked rows: one session per node
+    assert sorted(started) == [["JaneTestGateway"], ["JohnTestApi"], ["JohnTestApi"]]
     assert "at least one node" in c.post("/sessions", data={}).text
+
+
+def test_a_slow_start_returns_at_once_and_says_it_is_starting(cfgfile, monkeypatch):
+    import threading
+
+    from starlette.testclient import TestClient
+
+    import airlock.ui as ui
+    from airlock import nodestats
+    monkeypatch.setattr(nodestats, "collect", lambda nodes: {})
+    gate = threading.Event()
+    monkeypatch.setattr(session, "start_session", lambda cfg, names, **kw: gate.wait(10))
+    c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800")
+    r = c.post("/sessions", data={"sel": ["JohnTestApi"]}, follow_redirects=False)
+    gate.set()
+    assert r.status_code == 303 and "starting%201%20session" in r.headers["location"]
 
 
 def test_start_failure_is_shown_not_a_500(cfgfile, monkeypatch):
@@ -397,7 +421,7 @@ def test_nodestats_includes_ip_even_when_down(cfgfile, monkeypatch):
     assert nodestats.resolve_ip("nope.invalid") is None
 
 
-def test_ui_name_is_click_to_rename_and_status_is_one_group(cfgfile, monkeypatch):
+def test_ui_name_is_click_to_rename_and_has_its_ssh_pill(cfgfile, monkeypatch):
     import re
 
     from starlette.testclient import TestClient
@@ -407,16 +431,14 @@ def test_ui_name_is_click_to_rename_and_status_is_one_group(cfgfile, monkeypatch
     monkeypatch.setattr(nodestats, "collect", lambda nodes: {})
     c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800", follow_redirects=True)
     page = c.get("/").text
-    assert 'class=nm title="Click to rename" onclick="rn(this)">JohnTestApi' in page
+    assert 'class=nm role=button tabindex=0 title="Click to rename" onclick="rn(this)">JohnTestApi' in page
     assert 'action="/nodes/JohnTestApi/rename"' in page and "Escape" in page and "Enter" in page
     wrap = re.search(r'<div class=nmwrap>.*?</div>', page, re.S).group(0)
     assert "<button" not in wrap                                                  # no Save/Cancel buttons: Enter saves, blur/Escape cancels
     assert "[hidden]{display:none!important}" in page.split("</style>")[0]       # form{display:inline} must not defeat `hidden`
-    row = re.search(r'<tr data-node="JohnTestApi">.*?</tr>', page, re.S).group(0)
-    cells = re.split(r"<td>", row)
-    status = next(x for x in cells if "data-n=ip" in x)
-    assert all(k in status for k in ("data-n=dot", "data-n=ip", "data-n=load", "data-n=disk"))   # all status in one cell
-    assert "max-width" not in page.split("</style>")[0]                                          # uses the full wide screen
+    row = re.search(r'<tr data-kind=nodes data-key="JohnTestApi".*?</tr>', page, re.S).group(0)
+    assert '<span class=ct>ssh 10.0.1.11</span>' in row and "data-copy" in row and "ssh://" not in row.split("<td")[2]   # copies text only
+    assert "data-f=status" in row and "data-f=load" in row and "data-f=nsess" in row
     c.post("/nodes/JohnTestApi/rename", data={"new": "JohnRenamed"})
     assert "JohnRenamed" in [n.name for n in C.load_config(cfgfile).nodes]
     assert "already exists" in c.post("/nodes/JohnRenamed/rename", data={"new": "JaneTestGateway"}).text
@@ -433,7 +455,7 @@ def test_terminal_page_takes_focus_by_itself(cfgfile, tmp_path):
     assert "pending.push(d)" in page and "pending.splice(0)" in page                 # early keystrokes are queued, not dropped
 
 
-def test_session_actions_sit_right_after_the_container_column(cfgfile, tmp_path, monkeypatch):
+def test_session_table_columns_and_row_actions(cfgfile, tmp_path, monkeypatch):
     import re
 
     from starlette.testclient import TestClient
@@ -441,15 +463,16 @@ def test_session_actions_sit_right_after_the_container_column(cfgfile, tmp_path,
     import airlock.ui as ui
     from airlock import nodestats
     monkeypatch.setattr(nodestats, "collect", lambda nodes: {})
-    fake_session("bbbbbb22", "running", tmp=tmp_path)
+    fake_session("bbbbbb22", "running", tmp=tmp_path, ssh=True)
+    fake_session("cccccc33", "stopped", tmp=tmp_path, ssh=True)
     page = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800").get("/").text
-    head = re.search(r'<table id=sess><tr>(.*?)</tr>', page, re.S).group(1)
-    cols = [re.sub(r"<[^>]+>", "", c).strip() for c in head.split("<th>")[1:]]
-    assert cols[:5] == ["", "ID", "Status", "Container", "Actions"] and cols[-1] == "Allowlist"
-    row = re.search(r'<tr data-sid="bbbbbb22".*?</tr>', page, re.S).group(0)
-    cells = row.split("<td")[1:]
-    assert "data-f=container" in cells[3] and "/term" in cells[4] and "Stop" not in cells[4]   # shell, claude follow Container; stopping is "Stop selected" only
-    assert "data-f=cpu" in cells[5]
+    head = re.search(r'<table id=sess[^>]*><thead><tr>(.*?)</tr>', page, re.S).group(1)
+    cols = [re.sub(r"<[^>]+>", "", c).strip() for c in head.split("<th")[1:]]
+    assert [c.split(">")[-1] for c in cols] == ["", "Session", "Agent", "CPU &middot; memory &middot; workspace", "Node", "Open &middot; remove"]
+    live = re.search(r'<tr data-kind=sess data-key="bbbbbb22".*?</tr>', page, re.S).group(0)
+    assert "ssh -F " in live and "bbbbbb22</span>" in live and "claude &#x2197;" in live and 'data-arm="Stop &amp; remove?"' in live
+    dead = re.search(r'<tr data-kind=sess data-key="cccccc33".*?</tr>', page, re.S).group(0)
+    assert "class=ct" not in dead and "data-arm" not in dead                     # stopped: no ssh pill (key revoked), remove is one click
 
 
 def test_delete_many_stops_running_sessions_first(cfgfile, tmp_path, monkeypatch):
@@ -494,7 +517,7 @@ def test_error_banner_stays_visible_and_confirm_mentions_stopping(cfgfile, monke
     page = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800").get("/").text
     css = page.split("</style>")[0]
     assert ".err{color:#d33;position:sticky;top:0" in css and ".err:empty{display:none}" in css
-    assert "Running ones are stopped first" in page
+    assert "confirm(" not in page                                                   # two clicks on the button instead (P6)
 
 
 def test_terminal_links_open_in_a_new_tab_and_tabs_are_titled(cfgfile, tmp_path, monkeypatch):
@@ -509,7 +532,7 @@ def test_terminal_links_open_in_a_new_tab_and_tabs_are_titled(cfgfile, tmp_path,
     c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800")
     page = c.get("/").text
     for label in ("shell", "claude"):
-        a = re.search(rf'<a [^>]*>{label}</a>', page).group(0)
+        a = re.search(rf'<a [^>]*>{label} &#x2197;</a>', page).group(0)
         assert "target=_blank" in a and "rel=noopener" in a, a                    # new tab, and no window.opener back-reference
     assert "<title>claude bbbbbb22</title>" in c.get("/sessions/bbbbbb22/term?cmd=claude").text
     assert "<title>shell bbbbbb22</title>" in c.get("/sessions/bbbbbb22/term").text
@@ -562,3 +585,89 @@ integrations:
     assert "nodes: []" in text and "aws:\n    regions: [us-east-1]" in text.replace("\n  ", "\n  ")
     C.add_node(p, C.node_spec("C", "10.0.0.3"))        # and the emptied list can grow again
     assert [n.name for n in C.load_config(p).nodes] == ["C"] and "- " in p.read_text()
+
+
+def _quiet_stop(monkeypatch, outcome):
+    """stop_session stand-in: `outcome` maps sid -> pending list (empty = node cleanup worked)."""
+    calls = []
+
+    def fake_stop(cfg, sid):
+        calls.append(sid)
+        st = session.load_state(sid)
+        pend = outcome.get(sid, [])
+        st.update(status="needs_cleanup" if pend else "stopped", needs_cleanup=pend)
+        session.save_state(st)
+        return st
+    monkeypatch.setattr(session, "stop_session", fake_stop)
+    monkeypatch.setattr(session, "docker", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(session.sshaccess, "write_config", lambda *a, **k: None)
+    return calls
+
+
+def test_remove_session_handles_every_state(cfgfile, tmp_path, monkeypatch):
+    from airlock import audit
+    monkeypatch.setattr(audit, "HOME", tmp_path)
+    unreachable = [{"node": "JohnTestApi", "error": "No route to host"}]
+    calls = _quiet_stop(monkeypatch, {"bbbbbb22": unreachable, "cccccc33": unreachable})
+    fake_session("aaaaaa11", "stopped", tmp=tmp_path)
+    fake_session("bbbbbb22", "running", tmp=tmp_path)           # running, but its EC2 instance is stopped
+    fake_session("cccccc33", "needs_cleanup", tmp=tmp_path)     # the old dead end: Delete refused, Remove all stopped skipped it
+    fake_session("dddddd44", "running", tmp=tmp_path)           # running, node reachable
+    left = session.remove_many(C.load_config(cfgfile), ["aaaaaa11", "bbbbbb22", "cccccc33", "dddddd44"])
+    assert session.list_sessions() == []                        # all four gone in one action
+    assert left == ["bbbbbb22/JohnTestApi", "cccccc33/JohnTestApi"]   # leftovers are reported, never silent
+    assert calls == ["bbbbbb22", "cccccc33", "dddddd44"]        # stop (revoke) is always tried first; a stopped one is not re-stopped
+
+
+def test_dead_sessions_skip_live_and_fresh_starts(cfgfile, tmp_path, monkeypatch):
+    import time
+    for sid, st in (("aaaaaa11", "stopped"), ("bbbbbb22", "running"), ("cccccc33", "running"),
+                    ("dddddd44", "needs_cleanup"), ("eeeeee55", "starting"), ("ffffff66", "starting")):
+        fake_session(sid, st, tmp=tmp_path)
+    for sid, age in (("eeeeee55", 5), ("ffffff66", 3600)):
+        st = session.load_state(sid)
+        st["started_at"] = time.time() - age
+        session.save_state(st)
+    gw = session.load_state("dddddd44")
+    gw["mode"] = "gateway"
+    session.save_state(gw)
+    monkeypatch.setattr(session, "session_stats", lambda: {"bbbbbb22": {"running": True}, "cccccc33": {"running": False}})
+    assert sorted(session.dead_sessions("sandbox")) == ["aaaaaa11", "cccccc33", "ffffff66"]   # live and starting-now are kept
+    assert session.dead_sessions("gateway") == ["dddddd44"]
+
+
+def test_ui_one_click_remove_and_remove_all_not_running(cfgfile, tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    import airlock.ui as ui
+    from airlock import audit, nodestats
+    monkeypatch.setattr(audit, "HOME", tmp_path)
+    monkeypatch.setattr(nodestats, "collect", lambda nodes: {})
+    _quiet_stop(monkeypatch, {"cccccc33": [{"node": "JohnTestApi", "error": "timed out"}]})
+    for sid, st in (("aaaaaa11", "running"), ("bbbbbb22", "running"), ("cccccc33", "needs_cleanup")):
+        fake_session(sid, st, tmp=tmp_path)
+    monkeypatch.setattr(session, "session_stats", lambda: {"aaaaaa11": {"running": True}, "bbbbbb22": {"running": False}})
+    c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800", follow_redirects=True)
+    page = c.get("/").text
+    assert "Remove 1 not running" in page and "Remove all stopped" not in page   # cccccc33 by its state; bbbbbb22 the page script adds
+    r = c.post("/sessions/prune")
+    assert [s["id"] for s in session.list_sessions()] == ["aaaaaa11"]     # the live one stays
+    assert "may remain on: cccccc33/JohnTestApi" in r.text
+    c.post("/sessions/bulk-remove", data={"ssel": "aaaaaa11"})            # the row button: one click
+    assert session.list_sessions() == []
+    assert c.post("/sessions/bulk-remove", data={"ssel": ["../x"]}, follow_redirects=False).status_code == 404
+
+
+def test_deleting_a_node_clears_its_dead_sessions_first(cfgfile, tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    import airlock.ui as ui
+    from airlock import audit
+    monkeypatch.setattr(audit, "HOME", tmp_path)
+    _quiet_stop(monkeypatch, {})
+    fake_session("aaaaaa11", "needs_cleanup", tmp=tmp_path)               # used to pin the node forever
+    monkeypatch.setattr(session, "session_stats", lambda: {})
+    c = TestClient(ui.make_app(str(cfgfile)), base_url="http://127.0.0.1:8800", follow_redirects=True)
+    c.post("/nodes/bulk-delete", data={"sel": ["JohnTestApi"]})
+    assert "JohnTestApi" not in [n.name for n in C.load_config(cfgfile).nodes]
+    assert session.list_sessions() == []

@@ -792,7 +792,9 @@ Rules enforced by the framework:
 
 ## 9. Web UI
 
-Single page app served by the controller (FastAPI + HTMX/Alpine to stay small; React only if needed). Dark/light. Binds to 127.0.0.1 only and has no authentication in v1; no remote exposure.
+Server-rendered HTML from the controller (FastAPI) with one small vanilla script shared by every page (`airlock/ui_kit.py`); no framework, no build step, no CDN. Dark/light through CSS variables. Binds to 127.0.0.1 only; every request carries the per-start UI token, and state changes are form POSTs from this origin (docs/SECURITY.md F01). No remote exposure.
+
+Interaction rules for every table (details: [docs/UI_REFACTOR_SPEC.md](docs/UI_REFACTOR_SPEC.md)): a name is edited by clicking it (Enter saves, Esc cancels); `ssh …` lines copy on click; a status chip is a button when there is one obvious next step (`▶ start`, `✕ remove`, `fix →`, `↻ refresh`); rows have checkboxes and a bar with the actions for the ticked rows floats at the bottom only while rows are ticked (one table at a time); `⋯` and right-click open the row's menu with the rarer actions; destructive actions take a second click on the same button within 3 seconds, and there is no `confirm()` anywhere; keys `j`/`k`, `x`, `s`, `Enter`, `Del`, `m`, `?`, `Esc`.
 
 ### 9.1 Layout: two tabs on the left, EC2 and PROD
 
@@ -803,36 +805,50 @@ The two modes are never mixed on one screen. A vertical tab strip on the left ed
 | `EC2` | Mode 1, Sandbox (section 4) | EC2 test nodes (section 6.1) | Sandbox sessions with SSH access to the selected nodes |
 | `PROD` | Mode 2, Gateway (section 4) | Kubernetes clusters (kube contexts) available to the local `kubectl` on the controller host (section 7) | Gateway sessions whose only access to the cluster is through the MCP gateway |
 
-An agent session that reaches a production environment through MCP always lives in the `PROD` tab and never in `EC2`, so a Sandbox session and a production session cannot be confused or selected together. Each tab has its own session list, own bulk actions and own "Remove all stopped". The tab strip shows a count of running sessions as a badge on each tab, and the `PROD` tab uses a distinct accent colour.
+An agent session that reaches a production environment through MCP always lives in the `PROD` tab and never in `EC2`, so a Sandbox session and a production session cannot be confused or selected together. Each tab has its own session list, own bulk actions and own "Remove all not running". The tab strip shows a count of running sessions as a badge on each tab, and the `PROD` tab uses a distinct accent colour.
 
-### 9.2 `EC2` tab (what the UI shows today)
+### 9.2 `EC2` tab
 
 One page, in this order:
 
-1. Nodes table. Columns: name (click to rename), status (reachable / down, IP, load over 1 minute against core count, storage used with sizes), links (`web`, `docs`, `ssh`, from `defaults.links`, section 7.3), session (`Start` button), exec (execution mode selector: direct / ssh / ssh+sudo), labels (editable, with `Save`). The description line under the name shows the origin, for example `imported from AWS: <instance name> (stopped), matched tag Name`, or the build, branch and kube namespace notes. A row checkbox selects the node.
-2. Bulk bar for the selected nodes: a drop list of commands (`Start session on selected`, `AWS: start instances`, `AWS: stop instances`, `AWS: reboot instances`, `Delete from config`) and an `Apply` button. A stuck session has `Force discard`.
-3. `Add node` and `Import my AWS instances` (section 6.1).
-4. `Claude sign-in for sandbox sessions`: shows whether automatic sign-in is on (token saved in `~/.airlock/secrets`), so new sessions start signed in, with `Remove token`.
-5. Sessions list (Sandbox only): `Stop selected`, `Delete selected`, `Remove all stopped`, last updated time, and per session "attach" (xterm.js terminal over websocket to `docker exec` in the agent container) with a side panel of live operations.
-6. Operations, node access status (section 6.3) and history for these nodes.
+1. Nodes table. Columns: checkbox, node, status, load, links, sessions, `⋯`.
+   - Node: the name (click to rename), below it the ssh command to copy (`ssh <user>@<host>`), then the instance id, the exec mode and `src: <folders>` (link to the node's source folders). Notes from the config follow in grey.
+   - Status chip: `● up`; `● instance stopped ▶ start` (starts the EC2 instance); `● down: login missing fix →` (opens Settings); `● down` with the error in the tooltip; amber `instance starting…` / `stopping…` / `rebooting…` while AWS works. The EC2 state comes from one cached `describe-instances` per region, at most once a minute and right after a start, stop or reboot.
+   - Load: `cpu <1m> <5m> <15m> <running>/<total> · N cores` from `/proc/loadavg` (red when the 1-minute value is above the core count), and `disk / <pct> /data <pct>` (red at 85 % or more; used and size in the tooltip).
+   - Links: from `defaults.links` (section 7.3), green or red after a reachability probe. Sessions: `N running · N not running`.
+   - Row menu: Start session (disabled while the node is down), Rename, Source folders…, exec mode (`ssh`, `ssh_sudo`, `direct`), Start / Reboot / Stop instance, Delete from list. There is no Start button and no exec select in the row.
+   - Bar for ticked nodes: `Start session` (one separate session per ticked node that is up; `Start N sessions`), `Start instance`, `Reboot`, `Stop instance`, `Delete`. `Delete` first removes the sessions on those nodes that are not running, so a dead agent never pins a node; a node with a live session is refused.
+2. `+ Add node` (inline form) and `Import my AWS instances` (section 6.1).
+3. AI sessions (Sandbox only). Columns: checkbox, session (name or id, click to name it; the ssh command to copy while running), agent chip, CPU · memory · workspace, node, then `claude ↗`, `shell ↗` (new tab, xterm.js terminal over websocket to `docker exec` in the agent container), `✕` and `⋯`.
+   - Agent chip: `running`; `starting… 12s` (sessions start in the background and the row updates when the start finishes); `NOT RUNNING ✕ remove` (record says running, container gone); `cleanup pending ✕ remove`; `stopped ✕ remove`. Removing something that is not running is one click; `✕` on a running session asks by a second click.
+   - The heading shows `Remove N not running` only when N > 0. The bar for ticked sessions: `Stop & remove`, `Stop only`.
+   - `Stop & remove` works from any state: it stops the session if needed (containers removed, key and sudo rule revoked on each node) and deletes the record. If a node cannot be reached, for example its EC2 instance is already stopped, the session is removed anyway and the banner lists each node where the key and sudo rule may remain; their expiry marker and `airlock sweep` clean them up later. "Not running" means stopped, stuck in cleanup, running with the agent container gone, or starting for more than 10 minutes; a start in progress is never touched.
+   - A session started on several nodes from the CLI lists all its nodes in the Node column; the UI itself starts one session per node.
+
+The Claude sign-in and the node login are in Settings (shared by both tabs).
 
 ### 9.3 `PROD` tab
 
-The same page structure as `EC2`, with the target type swapped from EC2 nodes to Kubernetes clusters:
+The same patterns as `EC2`, with Kubernetes clusters instead of EC2 nodes:
 
-1. Clusters table instead of the nodes table. The list is built from the local kubectl: the contexts of `kubectl config get-contexts` (honouring `KUBECONFIG`), plus any `environment` entries of the config file (section 7) that name a `kube_context`. No cluster is invented: a context that exists locally appears with no further setup. Columns: name (the environment name, click to rename an alias; the context name stays visible), status (reachable / down from a read-only `kubectl --context X get ns`, server version, node count, API latency), links (patterns from `defaults.links` with placeholders for the cluster, such as `{context}`), session (`Start` button, creates a Gateway session), exec (execution mode: direct / ssh / ssh+sudo, section 7.2; `direct` by default for local contexts), tools (the tool servers enabled for this environment with mode read or read+approve-writes, section 7), tags and labels (editable, `Save`). Status checks and the exec mode apply per cluster.
-2. Bulk bar for the selected clusters: `Start session on selected`, `Remove from list` (only unregisters an environment from the config; it never touches the cluster or the local kubeconfig).
+1. Waiting for you: one card per item, with a left border in the PROD colour. A blocked write call (tool, `write, agent is waiting`, arguments, environment · session · time) has `Approve`, `For this session` and `Reject` (two clicks); a new access request (route, query or enable, with its feasibility and evidence) has `Approve` and `Reject`, and a proposed query can be edited in place (Ctrl+Enter saves, Esc cancels). Each button posts that one item. Empty state: "Nothing is waiting."
+2. Clusters table, built from the local kubectl (the contexts of `kubectl config get-contexts`, honouring `KUBECONFIG`) plus the `environment` entries of the config file (section 7) that name a `kube_context`. No cluster is invented. Columns: checkbox, cluster (click to rename; `context <ctx> · secrets <n> · <exec mode>` below, and missing secrets in red), status (`● up · N nodes · 38 ms` from a read-only `kubectl --context X get nodes`; red with the error and `↻ refresh` when the context fails, which runs the context's login plugin on this machine and hands the new token to the running sessions of that cluster), tools (one chip per tool server; a click saves that tool only and cycles `off → read → approve_writes → off`, tools without write operations toggle on/off), links (patterns from `defaults.links` such as `{context}`), sessions, `⋯`.
+   - Row menu: Start session, Rename, Set secret… (inline, masked, never shown again), Tool settings… (per-tool `k=v` settings), Exec mode… (direct / ssh / ssh+sudo and host, section 7.2), Refresh kubectl token, Remove from list (only unregisters an environment from the config, never touches the cluster or the kubeconfig; refused while a running session uses it).
+   - Bar for ticked clusters: `Start session` (one per ticked cluster that is up), `Refresh tokens`.
 3. `Add environment` (the wizard of section 7) and `Rescan local kubectl contexts`. There is no AWS import in this tab.
-4. Secret status per environment (present / missing, never the value) and a Claude sign-in block identical to `EC2` (the model login is shared, section 4).
-5. Sessions list (Gateway only): `Stop selected`, `Delete selected`, `Remove all stopped`, with the environment, the MCP gateway state and the tools exposed. "Attach" opens the terminal for the agent container, and the side panel shows live MCP tool calls.
-6. Approvals (section 9.4 item 5) for the environments listed here, query patterns (pending proposals and recently approved only, in a scrolling box, section 7.8) and audit scoped to the selected environment.
+4. AI sessions (Gateway only): as in `EC2`, with `N calls · N writes · live log ↗` (the audit log) instead of CPU and memory, and the cluster instead of the node; the Kubernetes token expiry and a `↻ refresh token` button under the cluster name. `Stop & remove` uses the same remove path as `EC2`, restricted to gateway sessions.
+5. Query patterns: recently approved only, in a scrolling box (section 7.8); the full catalogue is in Settings › Access.
 
-Differences that matter in the `PROD` tab: no passwordless-sudo node access (section 6.3 never applies), no SSH key is handed to the agent, mutating tools default to off, and the agent in the session can only call MCP tools. Starting a session on several clusters at once is allowed; each gets its own gateway token and audit trail.
+Differences that matter in the `PROD` tab: no passwordless-sudo node access (section 6.3 never applies), no SSH key is handed to the agent, mutating tools default to off, and the agent in the session can only call MCP tools. Starting sessions on several clusters at once is allowed; each gets its own gateway token and audit trail.
+
+### 9.3b Settings
+
+Claude sign-in (status chip, `Paste token…` or `Remove token`), node login (status chip, `Forget login`, or a red `login missing … set →` chip that opens the login form), the default source folders (mode chip toggles read-only / read-write (EC2), an Enabled checkbox that saves on change, `✕` removes, `Add folder` with a folder picker; credential folders are refused), and a link to Settings › Access.
 
 ### 9.3a Session names and ssh into the agent
 
 - Click a session id in the session list to give it a name (or edit or clear it). The name is also the ssh host name, and appears in `airlock session list`; `airlock session name ID NAME` does the same.
-- Every agent image runs an unprivileged `sshd` per connection (no listening port, no published port): the generated `~/.airlock/ssh_config` has `ProxyCommand docker exec -i air-agent-<id> /usr/sbin/sshd -i ...`, so only someone who can run docker on the controller host can connect. The Actions column shows the command to copy: `ssh <name or id>` (or `ssh -F ~/.airlock/ssh_config <name>` until `airlock ssh setup` has added the `Include` line to `~/.ssh/config`).
+- Every agent image runs an unprivileged `sshd` per connection (no listening port, no published port): the generated `~/.airlock/ssh_config` has `ProxyCommand docker exec -i air-agent-<id> /usr/sbin/sshd -i ...`, so only someone who can run docker on the controller host can connect. The session row shows the command to copy: `ssh <name or id>` (or `ssh -F ~/.airlock/ssh_config <name>` until `airlock ssh setup` has added the `Include` line to `~/.ssh/config`).
 - The login user is `agent`, not `root`: the container runs with all capabilities dropped as an unprivileged user, so `ssh root@<name>` is not possible by design. The shell starts in `/workspace` with the session's proxy and MCP variables (read from PID 1 at login, never written to a file).
 - The Mode 2 image contains `sshd` but no ssh client binaries, so the "no ssh in the agent" rule of section 4 still holds.
 
@@ -842,8 +858,8 @@ In v1 these live inside the tabs rather than as separate left-strip entries:
 
 1. Operations: run from the `EC2` tab and through the `ops.*` MCP tools; in `PROD` only as named operations through `remote_ops` (section 7).
 2. Environments: the `PROD` clusters table is the editor (rename, execution mode and host, tools with per-tool mode and settings, labels, masked secret entry, remove from list) plus the `Add environment` wizard of section 7.
-3. Query patterns (`PROD` tab, sections 7.1 and 7.8): proposals from agents and the recently approved patterns (with usage statistics) in a box with a vertical scroll bar. Rows are selected with checkboxes and acted on with the bulk drop list (Approve, Reject, Disable, ...); clicking a query or its name edits it. The full catalogue is in Settings (item 7).
-4. Approvals (`PROD` tab): pending mutating calls with arguments; approve / reject / approve-for-session. Also `airlock approvals`.
+3. Query patterns (`PROD` tab, sections 7.1 and 7.8): proposals from agents arrive as cards in "Waiting for you"; the recently approved patterns (with usage statistics) are in a box with a vertical scroll bar, selected with checkboxes and acted on with the bulk drop list (Disable, Enable, Remove, Export); clicking a query or its name edits it. The full catalogue is in Settings (item 7).
+4. Approvals (`PROD` tab, "Waiting for you"): pending mutating calls with arguments, one card each; approve / for this session / reject. Also `airlock approvals`.
 5. Audit: per session, `/audit/<session>` shows the hash-chained log and whether the chain is intact (linked from the session row).
 6. Config: the file is edited in place by every UI action (comments preserved); `airlock config validate|export`, `airlock patterns import|export|sync`.
 7. Settings: images are built with `airlock image [--gateway]`; the Claude sign-in block is shared between the tabs. `Access` (section 7.8): every approved route and pattern, in tabs by store kind (`Postgres`, `Elasticsearch`, `Redis`, ...), grouped by transport (`direct`, `exec`), with usage statistics, search, filters, paging, click-to-edit, bulk disable / remove, history and YAML import/export.

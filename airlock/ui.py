@@ -1,4 +1,4 @@
-"""Minimal controller UI (loopback only, no auth in v1): nodes, sessions, start/stop."""
+"""Controller UI (loopback only, per-start token): EC2 nodes and sandbox sessions, Settings. Layout and behaviour: docs/UI_REFACTOR_SPEC.md."""
 from __future__ import annotations
 
 import asyncio
@@ -13,133 +13,162 @@ import secrets
 import signal
 import struct
 import termios
+import threading
+import time
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import awsimport, nodeaccess, nodestats, session, sources, sshaccess
+from .ui_kit import (KIT_CSS, bar_btn, bulk_bar, chip, copy_pill, edit_name, kebab, kit_tail, menu, mi_act, mi_link, mi_post,
+                     post_btn)
 from .audit import Audit
 from .config import (ConfigError, resolve_env_user, add_node, claude_token_status, load_config, node_login_status, node_spec,
                      parse_kv, parse_list, remove_claude_oauth_token, remove_node_login, save_claude_oauth_token, save_node_login)
 
-PAGE = """<!doctype html><meta charset=utf-8><title>AirlockAI - EC2</title>
-<style>{base_css}body{{font:14px system-ui;margin:0}}table{{border-collapse:collapse;width:100%}}
-td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.up{{color:#2a9d4a}}.down{{color:#d33}}
-button{{padding:.2rem .6rem}}.err{{color:#d33;position:sticky;top:0;z-index:9;background:Canvas;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}.ok{{color:#2a9d4a;padding:.4rem .6rem;border:1px solid #2a9d4a;border-radius:6px}}.ok:empty{{display:none}}form{{display:inline}}.add input{{margin:.2rem}}
-.chips{{display:flex;flex-wrap:wrap;gap:.15rem 1.6rem;align-items:center}}.chip{{white-space:nowrap}}.lbl{{color:#888}}
-[hidden]{{display:none!important}}.nm{{cursor:text;border-bottom:1px dotted #888}}.nm:hover{{background:#8882}}</style>
+e = html.escape
+
+PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>AirlockAI - EC2</title>
+<style>{base_css}{kit_css}body{{font:14px system-ui;margin:0}}
+.err{{color:#d33;position:sticky;top:0;z-index:9;background:Canvas;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
+.ok{{color:#2a9d4a;padding:.4rem .6rem;border:1px solid #2a9d4a;border-radius:6px}}.ok:empty{{display:none}}.add input,.add select{{margin:.2rem}}
+.lbl{{color:#888}}[hidden]{{display:none!important}}</style>
 {nav}<main><p class=err>{error}</p><p class=ok>{info}</p>
-<h2>Nodes</h2>
-<form id=bulk method=post action=/sessions class=add><b>Selected nodes:</b>
-<select name=cmd><option value=/sessions data-start=1>Start session on selected
-<option value=/nodes/aws/start>AWS: start instances
-<option value=/nodes/aws/stop data-confirm="STOP the EC2 instances of the selected nodes? They go offline until started again.">AWS: stop instances
-<option value=/nodes/aws/reboot data-confirm="Reboot the EC2 instances of the selected nodes?">AWS: reboot instances
-<option value=/nodes/bulk-delete data-confirm="Delete selected nodes from the config?">Delete from config</select>
-<button onclick="return applyBulk(this)">Apply</button></form>
-<table id=nodes><tr><th><input type=checkbox id=nall title="select all"><th>Name <small class=lbl>(click to rename)</small><th>Status: reachable, IP, load (1 min), storage<th>Links<th>Session<th>Exec</tr>{nodes}</table>
-<details><summary>Add node</summary><form method=post action=/nodes class=add>
-<input name=name placeholder="name (e.g. JohnTestApi)" required> <input name=host placeholder="host or IP" required>
-<input name=port type=number value=22 style="width:5rem"> <input name=user placeholder="ssh user">
-<select name=mode><option>ssh<option>ssh_sudo<option>direct</select>
-<button>Add</button></form></details>
-<p>{aws_link}</p>
-<h2>AI Sessions</h2>
-<form id=sbulk method=post class=add><button formaction=/sessions/bulk-stop onclick="return confirm('Stop selected sessions?')">Stop selected</button>
-<button formaction=/sessions/bulk-delete onclick="return confirm('Delete selected sessions? Running ones are stopped first (this removes their key and sudo rule from the node).')">Delete selected</button>
-<button formaction=/sessions/bulk-discard onclick="return confirm('FORCE discard the selected sessions? Their containers and records are removed WITHOUT removing the ssh key and sudo rule from the nodes. Use only when a node cannot be reached; run airlock sweep later to clean up.')">Force discard</button>
-<button formaction=/sessions/prune formmethod=post>Remove all stopped</button> <span id=stamp style="color:#888"></span></form>
-<table id=sess><tr><th><input type=checkbox id=all title="select all"><th>ID<th>Status<th>Container<th>Actions<th>CPU<th>Memory<th>Workspace<th>Nodes<th>Allowlist</tr>{sessions}</table></main>
+<h1 style="font-size:1.05rem;margin:0 0 .3rem">EC2 &middot; Sandbox</h1>
+<div class=hint>Tick nodes to start sessions. Click a name to edit it, click an <code>ssh &hellip;</code> line to copy it, <kbd>&#x22ef;</kbd> or right-click for the rest. Press <kbd>?</kbd> for keys.</div>
+<h2>Nodes <span class=hint>{node_hint}</span></h2>
+<form id=nbulk method=post hidden></form>
+<div class=tablewrap><table id=nodes aria-label=Nodes><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=nodes aria-label="Select all nodes">
+<th>Node<th>Status<th>Load<th>Links<th>Sessions<th style="width:2.5rem"><span class=hint aria-hidden=true></span></tr></thead><tbody>{nodes}</tbody></table></div>
+<div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:center"><button type=button class=btn data-show-form=addnode
+onclick="const f=document.getElementById('addnode');f.hidden=!f.hidden;if(!f.hidden)f.querySelector('input').focus()">+ Add node</button> {aws_link}</div>
+<form id=addnode method=post action=/nodes class="add inline" hidden>
+<input name=name placeholder="name (e.g. JohnTestApi)" required aria-label="Node name"> <input name=host placeholder="host or IP" required aria-label=Host>
+<input name=port type=number value=22 style="width:5rem" aria-label=Port> <input name=user placeholder="ssh user" aria-label="ssh user">
+<select name=mode aria-label="Exec mode"><option>ssh<option>ssh_sudo<option>direct</select>
+<button class="btn primary">Add</button> <button type=button class=btn data-hide=addnode>Cancel</button></form>
+<h2>AI sessions <span class=hint>{sess_hint}</span> {prune} <span id=stamp class=hint></span></h2>
+<form id=sbulk method=post hidden></form>
+<div class=tablewrap><table id=sess aria-label="AI sessions" style="min-width:820px"><thead><tr><th style="width:2rem"><input type=checkbox class=selall data-for=sess aria-label="Select all sessions">
+<th>Session<th>Agent<th>CPU &middot; memory &middot; workspace<th>Node<th style="text-align:right">Open &middot; remove</tr></thead><tbody>{sessions}</tbody></table></div>
+{node_bar}{sess_bar}{kit}
 <script>
-function applyBulk(b){{const o=b.form.cmd.selectedOptions[0];
-  if(o.dataset.confirm&&!confirm(o.dataset.confirm))return false;
-  b.formAction=o.value;return o.dataset.start?startingMsg(b):true}}
-function startingMsg(b){{const f=b.form||b.closest('form');
-  setTimeout(()=>{{b.disabled=true;b.textContent='Starting\u2026 (15-30 s)'}},0);return true}}
-document.getElementById('nall').onchange=e=>document.querySelectorAll('#nodes input[name=sel]').forEach(c=>c.checked=e.target.checked);
 const gb=b=>b>=2**30?(b/2**30).toFixed(1)+' GB':(b/2**20).toFixed(0)+' MB';
-function cp(el){{const t=el.textContent,done=()=>{{el.textContent='copied';setTimeout(()=>el.textContent=t,800)}};
-  (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(t):Promise.reject()).then(done,()=>{{
-    const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}})}}
-function rn(el){{const w=el.closest('.nmwrap'),f=w.querySelector('form'),i=f.querySelector('input');
-  el.hidden=true;f.hidden=false;i.focus();i.select()}}
-function rnCancel(i){{const w=i.closest('.nmwrap');i.value=i.dataset.orig;w.querySelector('form').hidden=true;w.querySelector('.nm').hidden=false}}
-function rnKey(ev,i){{
-  if(ev.key==='Escape'){{ev.preventDefault();rnCancel(i)}}
-  else if(ev.key==='Enter'){{ev.preventDefault();
-    if(i.value.trim()===i.dataset.orig){{rnCancel(i);return}}   // unchanged: just close
-    i.onblur=null;if(i.form.reportValidity())i.form.requestSubmit();else i.onblur=()=>rnCancel(i)}}
-}}
-// Text from a node is never markup: build elements and set textContent.
-function lbl(el,k,t){{el.textContent='';const s=document.createElement('span');s.className='lbl';s.textContent=k;el.append(s,' '+t)}}
+const f2=x=>x==null?'-':Number(x).toFixed(2);
+const BUSY={{pending:'instance starting\\u2026',stopping:'instance stopping\\u2026',rebooting:'rebooting\\u2026','shutting-down':'instance shutting down\\u2026'}};
+// Node rows from /api/nodes/stats. Text from a node is never markup: elements + textContent only.
 async function ntick(){{try{{
   const r=await fetch('/api/nodes/stats');if(!r.ok)return;const d=await r.json();
-  for(const [name,s] of Object.entries(d)){{
-    const row=document.querySelector(`tr[data-node="${{name}}"]`);if(!row)continue;
-    const q=k=>row.querySelector(`[data-n=${{k}}]`);
-    const w=row.querySelector('a[data-link=web]');if(w&&'web_up' in s){{w.className=s.web_up?'up':'down';w.title=s.web_up?'web UI is up':'web UI is down'}}
-    const h=row.querySelector('a[data-link=ssh]');if(h&&'ssh_link_up' in s){{h.className=s.ssh_link_up?'up':'down';h.title=s.ssh_link_up?'ssh server answers':'ssh refuses to connect'}}
-    q('dot').className='chip '+(s.up?'up':'down');q('dot').textContent=s.up?'\u25cf up':(s.login_missing?'\u25cf down: login is missing':'\u25cf down');q('dot').title=s.error||'';
-    lbl(q('ip'),'IP',s.ip||'unresolved');q('ip').title=s.host+':'+s.port;
-    const ld=q('load'),dk=q('disk');dk.innerHTML='';
-    if(!s.up){{lbl(ld,'load','-');const sk=document.createElement('span');sk.className='chip lbl';sk.textContent='storage -';dk.appendChild(sk);continue}}
-    lbl(ld,'load',s.load1==null?'-':Number(s.load1).toFixed(2)+(s.cores?' / '+Number(s.cores)+' cores':''));
-    ld.className='chip '+((s.load1!=null&&s.cores&&s.load1>s.cores)?'down':'');
-    for(const k of s.disks){{const sp=document.createElement('span');sp.className='chip'+(parseInt(k.pct)>=85?' down':'');
-      const m=document.createElement('span');m.className='lbl';m.textContent=k.mount;
-      sp.append(m,` ${{k.pct}} (${{gb(k.used)}} / ${{gb(k.size)}})`);dk.appendChild(sp)}}
-  }}
-}}catch(e){{}}}}
+  for(const row of $$('tr[data-kind=nodes]')){{const s=d[row.dataset.key];if(!s)continue;
+    const ec2=s.ec2_state||'',iid=row.dataset.iid==='1';
+    Object.assign(row.dataset,{{up:s.up?'1':'0',stopped:ec2==='stopped'?'1':'0',running:ec2==='running'?'1':'0',noec2:iid&&!ec2?'1':'0'}});
+    const w=row.querySelector('a[data-link=web]');if(w&&'web_up' in s){{w.style.color=s.web_up?'var(--ok)':'var(--bad)';w.title=s.web_up?'web UI is up':'web UI is down'}}
+    const h=row.querySelector('a[data-link=ssh]');if(h&&'ssh_link_up' in s){{h.style.color=s.ssh_link_up?'var(--ok)':'var(--bad)';h.title=s.ssh_link_up?'ssh server answers':'ssh refuses to connect'}}
+    const st=row.querySelector('[data-f=status]');st.textContent='';
+    const where=(s.ip||'unresolved')+' \\u00b7 '+s.host+':'+s.port;
+    if(BUSY[ec2])st.append(chipEl('c-warn pulse',BUSY[ec2]));
+    else if(ec2==='stopped'){{const b=chipEl('c-idle','instance stopped','\\u25b6 start');b.setAttribute('form','act');b.setAttribute('formaction','/nodes/aws/start');
+      b.name='sel';b.value=row.dataset.key;b.title='Start the EC2 instance';st.append(b)}}
+    else if(s.up){{const c=chipEl('c-ok','up');c.title=where;st.append(c)}}
+    else if(s.login_missing){{st.append(el('a',{{class:'chip c-bad',href:'/settings',title:s.error||''}},el('span',{{class:'dot'}}),el('span',{{class:'t'}},'down: login missing'),el('span',{{class:'go'}},'fix \\u2192')))}}
+    else{{const c=chipEl('c-bad','down');c.title=(s.error||'')+' ('+where+')';st.append(c)}}
+    const ld=row.querySelector('[data-f=load]');ld.textContent='';
+    if(!s.up){{ld.append(el('span',{{class:'hint'}},'\\u2013'));continue}}
+    const m=el('div',{{class:'meta load'}}),hot=s.load1!=null&&s.cores&&s.load1>s.cores;
+    m.append(el('span',{{class:hot?'hot':null,title:'/proc/loadavg: 1, 5 and 15 minute averages, running/total tasks'}},'cpu ',
+      el('b',{{}},f2(s.load1)+' '+f2(s.load5)+' '+f2(s.load15)+(s.tasks?'  '+s.tasks:'')),s.cores?' \\u00b7 '+Number(s.cores)+' cores':''));
+    if((s.disks||[]).length){{const dk=el('span',{{}},'disk');
+      for(const k of s.disks){{const x=el('span',{{class:parseInt(k.pct)>=85?'hot':null}},' '+k.mount+' ',el('b',{{}},k.pct),' ');
+        x.title=k.mount+': '+gb(k.used)+' used of '+gb(k.size);dk.append(x)}}m.append(dk)}}
+    ld.append(m)}}
+  syncBars()}}catch(e){{}}}}
 ntick();setInterval(ntick,30000);
-document.getElementById('all').onchange=e=>document.querySelectorAll('#sess input[name=ssel]').forEach(c=>c.checked=e.target.checked);
-async function tick(){{try{{
-  const r=await fetch('/api/sessions/stats');if(!r.ok)return;const d=await r.json();
-  for(const [sid,s] of Object.entries(d)){{
-    const row=document.querySelector(`tr[data-sid="${{sid}}"]`);if(!row)continue;
-    const c=row.querySelector('[data-f=container]'),life=row.dataset.life;
-    const up=s.running;c.className=up?'up':(life==='stopped'?'':'down');
-    c.textContent=up?'\u25cf running':(life==='stopped'?'\u25cb not running':'\u25cf NOT RUNNING');
-    for(const f of ['cpu','mem','workspace'])row.querySelector(`[data-f=${{f}}]`).textContent=s[f];
-  }}
-  document.getElementById('stamp').textContent='updated '+new Date().toLocaleTimeString();
-}}catch(e){{}}}}
-tick();setInterval(tick,5000);
-</script>"""
+</script></main>"""
 
 
 BASE_CSS = """:root{color-scheme:light dark}nav{position:sticky;top:0;align-self:flex-start;height:100vh;box-sizing:border-box;width:9rem;flex:none;padding:1rem .6rem;
 border-right:1px solid #8884;display:flex;flex-direction:column;gap:.4rem}.brand{font-weight:700;margin-bottom:.6rem}
-nav .tab{display:flex;justify-content:space-between;align-items:center;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;
+nav .tab{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.3rem;padding:.5rem .7rem;border-radius:6px;text-decoration:none;color:inherit;
 border:1px solid #8884;font-weight:600}nav .tab.on{background:#2a6df4;color:#fff;border-color:#2a6df4}nav .tab.prod.on{background:#c2410c;border-color:#c2410c}
 nav .tab.prod{border-left:4px solid #c2410c}nav .tab.ec2{border-left:4px solid #2a6df4}.badge{font-size:.75rem;background:#8883;border-radius:9px;padding:0 .45rem}
-nav .tab.on .badge{background:#fff3}.badge.wait{background:#c2410c;color:#fff}.waitlink{text-decoration:none;margin:-.2rem 0 .2rem .4rem}nav small{color:#888;margin-top:auto}body{display:flex}main{flex:1;min-width:0;padding:1rem 2rem}
-.tag{font-size:.75rem;padding:0 .4rem;border:1px solid #8886;border-radius:4px;color:#888}pre.json{white-space:pre-wrap;margin:0}.cmd{cursor:copy;font-size:.8rem;background:#8882;padding:0 .3rem;border-radius:3px;display:inline-block;margin-top:.2rem}"""
+nav .tab.on .badge{background:#fff3}.badge.wait{background:#c2410c;color:#fff;margin-left:auto}nav .tab.on .badge.wait{background:#fff;color:#c2410c}nav small{color:#888;margin-top:auto}body{display:flex}main{flex:1;min-width:0;padding:1rem 2rem 6rem}
+@media (max-width:640px){nav{display:none}main{padding:1rem 16px 6rem}}
+.tag{font-size:.75rem;padding:0 .4rem;border:1px solid #8886;border-radius:4px;color:#888}pre.json{white-space:pre-wrap;margin:0}"""
+
+SESSION_NAME_PATTERN = r"[A-Za-z][A-Za-z0-9_.\-]{0,62}"
+NODE_NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}"
+STALE_START = 600   # a session "starting" for longer than this is dead (session.dead_sessions uses the same limit)
 
 
-def session_cells(s: dict) -> tuple[str, str]:
-    """(id cell, ssh snippet) for a session row: click the id/name to set a name; the name is also the ssh host name."""
-    import html as _h
-    sid, name = _h.escape(s["id"]), _h.escape(s.get("name", ""))
-    shown = name or sid
-    sub = f' <small class=lbl>{sid}</small>' if name else ""
-    pre = '<span class=lbl title="not editable: this is the ssh command prefix">ssh</span> ' if s.get("ssh") else ""
-    idcell = (f'<div class=nmwrap>{pre}<b class=nm title="Click to name this session (the name works as the ssh host)" onclick="rn(this)">{shown}</b>{sub}'
-              f'<form method=post action="/sessions/{sid}/name" hidden><input name=name value="{name}" placeholder="name (ssh host)" size=18 '
-              f'autocomplete=off spellcheck=false data-orig="{name}" pattern="[A-Za-z][A-Za-z0-9_.\\-]{{0,62}}" '
-              f'onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>')
-    return idcell, ""   # the ssh command is no longer shown in the Actions column; the "ssh" prefix before the name stays
+def session_dead(s: dict) -> bool:
+    """Not doing anything, as far as the state file says (a running record whose container is gone is found by the page script)."""
+    if s["status"] == "starting":
+        return time.time() - s.get("started_at", time.time()) > STALE_START
+    return s["status"] in ("stopped", "needs_cleanup")
+
+
+def session_row(s: dict, *, kind: str, form: str, rm: str, stop: str, metrics: str, where: str, extra: str = "") -> str:
+    """One row of an AI sessions table (EC2 and PROD alike, docs/UI_REFACTOR_SPEC.md 4.2 and 5.3)."""
+    sid, name, status = s["id"], s.get("name", ""), s["status"]
+    live, dead = status == "running", session_dead(s)
+    namecell = edit_name(name or sid, f"/sessions/{sid}/name", field="name", value=name, pattern=SESSION_NAME_PATTERN,
+                         placeholder="name (ssh host)", title="Click to name this session (the name works as the ssh host)", required=False, size=18)
+    sub = f'<span class=sub>{e(sid)}</span>' if name else ""
+    # `ssh <name or id>` once `airlock ssh setup` put the Include in ~/.ssh/config; until then the -F form, which works as pasted
+    pill = f'<div data-liveonly>{copy_pill(sshaccess.command(s))}</div>' if live and s.get("ssh") else ""
+    err = f'<div class=sub style="color:var(--bad);font-family:inherit">{e(s["error"])}</div>' if s.get("error") else ""
+    rm_attrs = f'form=act formaction="{e(rm)}" name=ssel value="{e(sid)}"'
+    if live:
+        agent = chip("c-idle", "checking…")   # the page script asks docker and turns it into "running" or "NOT RUNNING ✕ remove"
+    elif status == "starting" and not dead:
+        agent = chip("c-warn pulse", "starting…", attrs=f'data-starting="{int(s.get("started_at", time.time()))}"')
+    elif status == "stopping":
+        agent = chip("c-warn pulse", "stopping…")
+    else:
+        label = {"stopped": "stopped", "needs_cleanup": "cleanup pending"}.get(status, "NOT RUNNING")
+        agent = chip("c-idle" if status == "stopped" else "c-bad", label, "✕ remove", attrs=rm_attrs,
+                     title="Not doing anything. Click to remove it" + (" (the key and sudo rule are revoked first)." if status != "stopped" else "."))
+    opens = ""
+    if live:
+        opens = (f'<a class=lnk data-liveonly data-claude href="/sessions/{e(sid)}/term?cmd=claude" target=_blank rel=noopener>claude &#x2197;</a>'
+                 f'<a class=lnk data-liveonly href="/sessions/{e(sid)}/term" target=_blank rel=noopener>shell &#x2197;</a>')
+    busy = status == "stopping" or (status == "starting" and not dead)
+    x = "" if busy else post_btn("✕", rm, "ssel", sid, cls="btn danger mini", arm="Stop & remove?" if live else "",
+                                 title="Stop the agent, revoke node access, remove" if live else "Remove from the list",
+                                 aria=f"Remove session {name or sid}", extra="data-rm")
+    items = []
+    if live:
+        items += [mi_link("Open claude", f"/sessions/{sid}/term?cmd=claude", newtab=True, key="Enter", extra="data-show=live"),
+                  mi_link("Open shell", f"/sessions/{sid}/term", newtab=True, extra="data-show=live")]
+    items += [mi_act("Name this session", "rename"), "-"]
+    if live:
+        items.append(mi_post("Stop only", stop, "ssel", sid, show="live"))
+    if not busy:
+        items.append(mi_post("Stop & remove" if live else "Remove", rm, "ssel", sid, arm="Stop & remove?" if live else "", danger=True, key="Del"))
+    return (f'<tr data-kind={kind} data-key="{e(sid)}" data-sid="{e(sid)}" data-life="{e(status)}" data-live=0 data-dead={1 if dead else 0} '
+            f'data-nodes="{e(",".join(s.get("nodes", [])))}" data-rmform=act data-rmaction="{e(rm)}">'
+            f'<td><input type=checkbox class=rowsel name=ssel value="{e(sid)}" form={form} aria-label="Select session {e(name or sid)}">'
+            f'<td>{namecell}{sub}{pill}{err}<td data-f=agent>{agent}<td>{metrics if live else "<span class=hint>&ndash;</span>"}<td>{e(where)}{extra}'
+            f'<td><div class=acts>{opens}{x}{kebab(name or sid)}{menu(name or sid, items)}</div></tr>')
+
+
+def prune_button(action: str, dead: int) -> str:
+    """P7: shown only when there is something to remove; the page script keeps the count current."""
+    return (f'<button class=btn form=act formaction="{e(action)}" data-prune{"" if dead else " hidden"} '
+            f'title="stopped, stuck in cleanup, or whose agent container is gone">Remove {dead} not running</button>')
 
 
 def nav_html(active: str) -> str:
-    """Left tab strip: EC2 (Mode 1, sandbox) and PROD (Mode 2, gateway). Badges count running sessions of each mode."""
+    """Left tab strip: EC2 (Mode 1, sandbox), PROD (Mode 2, gateway), Settings. Badges count running sessions of each mode;
+    PROD also shows how many items wait for an approval."""
     live = [s for s in session.list_sessions() if s["status"] in ("running", "starting")]
     n_prod = sum(1 for s in live if s.get("mode") == "gateway")
     n_ec2 = len(live) - n_prod
 
     def badge(n):
         return f'<span class=badge title="running sessions">{n}</span>' if n else ""
-    try:   # items in the PROD tab's "Waiting for approval": blocked calls and proposal items
+    try:   # items in the PROD tab's "Waiting for you": blocked calls and proposal items
         from . import gwsession, proposals
         from .patternstore import PatternStore
         st = PatternStore()
@@ -149,10 +178,9 @@ def nav_html(active: str) -> str:
     except Exception:
         waiting = 0
     wait = f'<span class="badge wait" title="waiting for your approval">{waiting} waiting</span>' if waiting else ""
-    return (f'<nav><div class=brand>AirlockAI</div>'
+    return (f'<nav aria-label=Tabs><div class=brand>AirlockAI</div>'
             f'<a class="tab ec2{" on" if active == "ec2" else ""}" href="/?tab=ec2">EC2 {badge(n_ec2)}</a>'
-            f'<a class="tab prod{" on" if active == "prod" else ""}" href="/prod">PROD {badge(n_prod)}</a>'
-            + (f'<a class=waitlink href="/prod#waiting">{wait}</a>' if wait else "") +
+            f'<a class="tab prod{" on" if active == "prod" else ""}" href="/prod{"#waiting" if waiting else ""}">PROD {badge(n_prod)}{wait}</a>'
             f'<a class="tab{" on" if active == "settings" else ""}" href="/settings">Settings</a>'
             f'<small>{"Mode 2: gateway" if active == "prod" else "Mode 1: sandbox" if active == "ec2" else ""}</small></nav>')
 
@@ -248,79 +276,107 @@ def make_app(config_path=None, ui_token: str | None = None) -> FastAPI:
 
     def ec2_page(error: str = "", info: str = "") -> str:
         cfg = load_config(config_path)
+        all_sessions = session.list_sessions()
+        sandbox = [s for s in all_sessions if s.get("mode") != "gateway"]   # production sessions live in the PROD tab only
         rows = ""
         for n in cfg.nodes:
-            opts = "".join(f"<option{' selected' if m == n.exec.mode else ''}>{m}" for m in ("ssh", "ssh_sudo", "direct"))
-            mode = f'<form method=post action="/nodes/{e(n.name)}/mode"><select name=mode onchange="this.form.submit()">{opts}</select></form>'
-            links = [f'<a href="{e(u)}" target=_blank rel=noopener data-link="{e(k)}">{e(k)}</a>' for k, u in n.links.items()]
+            nm = n.name
+            links = [f'<a class=lnk href="{e(u)}" target=_blank rel=noopener data-link="{e(k)}">{e(k)}</a>' for k, u in n.links.items()]
             if "ssh" not in n.links:  # no ssh template configured: fall back to the node's own address
                 user = n.exec.user if n.exec.user and "$" not in n.exec.user else ""
-                links.append(f'<a href="ssh://{e(user + "@" if user else "")}{e(n.host)}" data-link=ssh>ssh</a>')
+                links.append(f'<a class=lnk href="ssh://{e(user + "@" if user else "")}{e(n.host)}" data-link=ssh>ssh</a>')
             iid = n.resolved_instance_id()
             own = n.notes if n.notes and not n.notes.startswith("imported from AWS:") else ""   # drop the old auto-generated import note
-            note = "".join(f'<br><small style="color:#888">{e(x)}</small>' for x in (iid, n.created_by and f"created by {n.created_by}", own) if x)
-            srcs = ", ".join(x.mount_name for x in sources.load(n.name) if x.enabled) or "none"
-            note += (f'<br><small><a href="/nodes/{quote(n.name)}/sources" title="source folders mounted in AI sessions on this node">'
-                     f'src: {e(srcs)}</a>{"" if sources.is_custom(n.name) else " (default)"}</small>')
+            srcs = ", ".join(x.mount_name for x in sources.load(nm) if x.enabled) or "none"
+            sub = " &middot; ".join(e(x) for x in (iid, n.exec.mode, n.created_by and f"created by {n.created_by}") if x)
+            sub += (f' &middot; <a href="/nodes/{quote(nm)}/sources" title="source folders mounted in AI sessions on this node">'
+                    f'src: {e(srcs)}</a>{"" if sources.is_custom(nm) else " (default)"}')
+            note = f'<div class=hint>{e(own)}</div>' if own else ""
             su = n.exec.user or ""
             su = (resolve_env_user(su) if "$" in su else su) or os.environ.get("USER_NAME", "")
             sshcmd = f"ssh {su}@{n.host}" if su else f"ssh {n.host}"
-            chk = f'<input type=checkbox name=sel value="{e(n.name)}" form=bulk>'
-            start = (f'<form method=post action=/sessions><input type=hidden name=nodes value="{e(n.name)}">'
-                     f'<button onclick="return startingMsg(this)">Start</button></form>')
-            name = (f'<div class=nmwrap><b class=nm title="Click to rename" onclick="rn(this)">{e(n.name)}</b>'
-                    f'<form method=post action="/nodes/{e(n.name)}/rename" hidden><input name=new value="{e(n.name)}" size=34 required '
-                    f'autocomplete=off spellcheck=false data-orig="{e(n.name)}" pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{{0,63}}" '
-                    f'onkeydown="rnKey(event,this)" onblur="rnCancel(this)"></form></div>')
-            status = ('<div class=chips><span class="chip" data-n=dot>&hellip;</span><span class=chip data-n=ip><span class=lbl>IP</span> -</span>'
-                      '<span class=chip data-n=load><span class=lbl>load</span> -</span><span class=chips data-n=disk></span></div>')
-            rows += (f'<tr data-node="{e(n.name)}"><td>{chk}<td>{name}<small style="cursor:pointer" title="click to copy" onclick="cp(this)">{e(sshcmd)}</small>{note}'
-                     f'<td>{status}<td>{" ".join(links)}<td>{start}<td>{mode}</tr>')
+            name = edit_name(nm, f"/nodes/{quote(nm)}/rename", pattern=NODE_NAME_PATTERN, placeholder="node name", size=30)
+            mine = [s for s in sandbox if nm in s["nodes"]]
+            n_dead = sum(1 for s in mine if session_dead(s))
+            n_live = len(mine) - n_dead
+            count = " ".join(x for x in (f"<span><b>{n_live}</b> running</span>" if n_live else "",
+                                         f"<span class=hot><b>{n_dead}</b> not running</span>" if n_dead else "") if x)
+            count = f'<span class="meta row">{count}</span>' if count else "<span class=hint>&ndash;</span>"
+            items = [mi_post("Start session", "/sessions", "nodes", nm, need="up", key="s", extra="data-start"),
+                     mi_act("Rename", "rename"), mi_link("Source folders…", f"/nodes/{quote(nm)}/sources"), "-"]
+            items += [mi_post(("● " if m == n.exec.mode else "○ ") + f"exec: {m}", f"/nodes/{quote(nm)}/mode", "mode", m,
+                              role="menuitemradio", checked=m == n.exec.mode) for m in ("ssh", "ssh_sudo", "direct")]
+            if iid:
+                items += ["-", mi_post("Start instance", "/nodes/aws/start", "sel", nm, show="stopped|noec2"),
+                          mi_post("Reboot instance", "/nodes/aws/reboot", "sel", nm, show="running|noec2"),
+                          mi_post("Stop instance", "/nodes/aws/stop", "sel", nm, show="running|noec2", danger=True, arm=f"Stop {nm}?")]
+            items += ["-", mi_post("Delete from list", "/nodes/bulk-delete", "sel", nm, danger=True, arm="Delete from the list?")]
+            rows += (f'<tr data-kind=nodes data-key="{e(nm)}" data-node="{e(nm)}" data-iid={1 if iid else 0}>'
+                     f'<td><input type=checkbox class=rowsel name=sel value="{e(nm)}" form=nbulk aria-label="Select {e(nm)}">'
+                     f'<td>{name}<div>{copy_pill(sshcmd)}</div><small class=sub>{sub}</small>{note}'
+                     f'<td data-f=status>{chip("c-idle", "checking" + chr(0x2026))}<td data-f=load><span class=hint>&ndash;</span>'
+                     f'<td><div style="display:flex;gap:.5rem">{" ".join(links)}</div><td data-f=nsess>{count}'
+                     f'<td>{kebab(nm)}{menu(nm, items)}</tr>')
+        if not rows:
+            rows = '<tr><td colspan=7 class=hint style="text-align:center;padding:1rem">No nodes yet. Add one, or import your AWS instances.</tr>'
         srows = ""
-        for s in session.list_sessions():
-            if s.get("mode") == "gateway":
-                continue  # production sessions live in the PROD tab only
-            stop = (f'<a href=/sessions/{e(s["id"])}/term target=_blank rel=noopener>shell</a> '
-                    f'<a href="/sessions/{e(s["id"])}/term?cmd=claude" target=_blank rel=noopener>claude</a>'
-                    if s["status"] == "running" else "")
-            sid = e(s["id"])
-            idcell, sshcmd = session_cells(s)
-            srows += (f'<tr data-sid="{sid}" data-life="{e(s["status"])}"><td><input type=checkbox name=ssel value="{sid}" form=sbulk>'
-                      f'<td>{idcell}<td>{e(s["status"])}<td data-f=container>&hellip;<td>{stop}{sshcmd}<td data-f=cpu>-<td data-f=mem>-<td data-f=workspace>-'
-                      f'<td>{e(", ".join(s["nodes"]))}<td>{e(", ".join(s.get("allow", [])))}</tr>')
+        for s in sandbox:
+            metrics = ('<div class="meta row"><span>cpu <b data-f=cpu>-</b></span><span>mem <b data-f=mem>-</b></span>'
+                       '<span>ws <b data-f=workspace>-</b></span></div>')
+            srows += session_row(s, kind="sess", form="sbulk", rm="/sessions/bulk-remove", stop="/sessions/bulk-stop", metrics=metrics,
+                                 where=", ".join(s["nodes"]))
+        if not srows:
+            srows = '<tr><td colspan=6 class=hint style="text-align:center;padding:1rem">No AI sessions. Tick a node that is up and click Start session.</tr>'
         if not awsimport.available():
-            aws_link = '<span style="color:#888">Import from AWS: AWS CLI not found</span>'
+            aws_link = '<span class=hint>Import from AWS: AWS CLI not found</span>'
         elif not awsimport.current_user():
-            aws_link = '<span style="color:#888">Import from AWS: USER_NAME is not set in the environment of this server</span>'
+            aws_link = '<span class=hint>Import from AWS: USER_NAME is not set in the environment of this server</span>'
         else:
-            aws_link = '<a href=/aws>Import my AWS instances</a>'
-        return PAGE.format(nodes=rows, sessions=srows, error=e(error), info=e(info), aws_link=aws_link,
-                           nav=nav_html("ec2"), base_css=BASE_CSS)
+            aws_link = '<a class=btn href=/aws style="text-decoration:none">Import my AWS instances</a>'
+        node_bar = bulk_bar("nodes", "node", "nodes", [
+            bar_btn("Start session", "nbulk", "/sessions", need="up", only=True, labeln="Start {n} sessions", primary=True,
+                    busy="Starting…", start=True),
+            bar_btn("Start instance", "nbulk", "/nodes/aws/start", need="stopped|noec2", only=True),
+            bar_btn("Reboot", "nbulk", "/nodes/aws/reboot", need="running|noec2", only=True),
+            bar_btn("Stop instance", "nbulk", "/nodes/aws/stop", need="running|noec2", only=True, arm="Stop {n}?", danger=True),
+            bar_btn("Delete", "nbulk", "/nodes/bulk-delete", arm="Delete {n}?", danger=True)])
+        sess_bar = bulk_bar("sess", "session", "sessions", [
+            bar_btn("Stop & remove", "sbulk", "/sessions/bulk-remove", arm="Stop {n} running & remove?", arm_need="live", danger=True),
+            bar_btn("Stop only", "sbulk", "/sessions/bulk-stop", need="live", only=True)])
+        n_run = sum(1 for s in sandbox if s["status"] == "running")
+        return PAGE.format(nodes=rows, sessions=srows, error=e(error), info=e(info), aws_link=aws_link, nav=nav_html("ec2"), base_css=BASE_CSS,
+                           kit_css=KIT_CSS, kit=kit_tail(), node_hint=f"{len(cfg.nodes)} node{'s' if len(cfg.nodes) != 1 else ''}",
+                           sess_hint=f"{n_run} running", prune=prune_button("/sessions/prune", sum(1 for s in sandbox if session_dead(s))),
+                           node_bar=node_bar, sess_bar=sess_bar)
 
-    SETTINGS = """<!doctype html><meta charset=utf-8><title>AirlockAI - Settings</title><style>{base_css}body{{font:14px system-ui;margin:0}}
-.up{{color:#2a9d4a}}.down{{color:#d33}}.lbl{{color:#888}}.err{{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
-form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0 .25rem;border-radius:3px}}</style>
-{nav}<main><p class=err>{error}</p><p class=subnav><b>General</b> &nbsp; <a href=/settings/access>Access</a> <span class=lbl>(approved routes and query patterns)</span></p>
-<h2>Claude sign-in for sandbox and gateway sessions</h2>
-<p class=lbl>Shared by every session, on both the EC2 and the PROD tab.</p><div id=auth>{auth_box}</div>
-<h2>Node login (passwordless ssh and sudo on EC2 nodes)</h2>
-<p class=lbl>Used by the controller only, once per session, to install the session's ssh key and a validated sudoers rule
-(<code>/etc/sudoers.d/90-airlock-&lt;session&gt;</code>) on test nodes, and removed again when the session ends. Prod nodes are refused unless
-allowed in the config. The agent never sees the password.</p><div id=login>{login_box}</div>
-<h2>Source code mounted into agents (default)</h2>
-<p class=lbl>The default list: used by PROD sessions and by EC2 nodes without their own list (set one with the <i>src:</i> link under a node name).
-A session on several nodes mounts the folders of all of them. Each folder appears in the agent container as <code>/src/&lt;folder name&gt;</code>. Read-only by default; read-write applies to EC2 (sandbox)
-sessions only, PROD sessions always get read-only. Takes effect for sessions started after the change. Anything inside a mounted folder (a <code>.env</code> file, for example)
-is visible to the agent, and folders that overlap credential directories (<code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.kube</code>, ...) are refused.</p>
-<table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
-<form method=post action=/settings/sources class=add><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required> <button type=button onclick="pickFolder()">Browse&hellip;</button>
-<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{picker}</main>"""
+    SETTINGS = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>AirlockAI - Settings</title>
+<style>{base_css}{kit_css}body{{font:14px system-ui;margin:0}}
+.lbl{{color:#888}}.err{{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
+.add input{{margin:.2rem}}code{{background:#8882;padding:0 .25rem;border-radius:3px}}.line{{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}}</style>
+{nav}<main><p class=err>{error}</p><h1 style="font-size:1.05rem;margin:0 0 .3rem">Settings</h1>
+<div class=hint>Shared by every session on both tabs.</div>
+<h2>Claude sign-in <span class=hint>for sandbox and gateway sessions</span></h2>{auth_box}
+<h2>Node login <span class=hint>used by the controller once per session to install the session key and sudo rule</span></h2>{login_box}
+<p class=hint>The controller installs the session's ssh key and a validated sudoers rule (<code>/etc/sudoers.d/90-airlock-&lt;session&gt;</code>)
+on test nodes, and removes them when the session ends. Prod nodes are refused unless allowed in the config. The agent never sees the password.</p>
+<h2>Source folders mounted into agents <span class=hint>default list; a node can have its own (the <i>src:</i> link under a node name)</span></h2>
+<p class=hint>Each folder appears in the agent container as <code>/src/&lt;folder name&gt;</code>. A session on several nodes mounts the folders of all of them.
+Read-only by default; read-write applies to EC2 (sandbox) sessions only, PROD sessions always get read-only. Takes effect for sessions started after the change.
+Anything inside a mounted folder (a <code>.env</code> file, for example) is visible to the agent; folders that overlap credential directories
+(<code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.kube</code>, ...) are refused.</p>
+<div class=tablewrap><table aria-label="Source folders" style="min-width:560px"><thead><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th style="text-align:right">Remove</tr></thead>
+<tbody>{src_rows}</tbody></table></div>
+<form method=post action=/settings/sources class="add inline"><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required aria-label="Folder path">
+<button type=button class=btn onclick="pickFolder()">Browse&hellip;</button>
+<select name=mode aria-label=Mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button class="btn primary">Add folder</button></form>
+<h2>Access</h2><div class=hint>Approved routes and query patterns live on their own page: <a class=lnk href=/settings/access>Access &rarr;</a></div>
+{picker}{kit}</main>"""
 
     PICKER = """<dialog id=picker style="min-width:22rem;max-width:90vw"><b>Select a folder</b>
-<p id=pcur style="margin:.4rem 0"><code></code></p><p id=perr class=down></p>
+<p id=pcur style="margin:.4rem 0"><code></code></p><p id=perr style="color:var(--bad)"></p>
 <div id=plist style="max-height:50vh;overflow:auto;border:1px solid #8884;border-radius:6px"></div>
-<p style="margin-top:.6rem"><button type=button id=pup>&uarr; Up</button> <button type=button id=pok>Select this folder</button>
-<button type=button id=pcancel>Cancel</button></p></dialog>
+<p style="margin-top:.6rem"><button type=button class=btn id=pup>&uarr; Up</button> <button type=button class="btn primary" id=pok>Select this folder</button>
+<button type=button class=btn id=pcancel>Cancel</button></p></dialog>
 <script>
 function pickFolder(start){
   const dlg=document.getElementById('picker'),list=document.getElementById('plist'),cur=document.querySelector('#pcur code'),
@@ -332,7 +388,7 @@ function pickFolder(start){
     if(!r.ok){err.textContent=d.error||'cannot list';return}
     err.textContent='';at=d.path;parent=d.parent;cur.textContent=at;up.disabled=!parent;list.replaceChildren();
     if(!d.dirs.length){const m=document.createElement('div');m.className='lbl';m.style.padding='.4rem';m.textContent='no sub-folders';list.append(m)}
-    for(const k of d.dirs){const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #8882;padding:.35rem .5rem';
+    for(const k of d.dirs){const b=document.createElement('button');b.type='button';b.style.cssText='display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #8882;padding:.35rem .5rem;background:none;color:inherit;cursor:pointer';
       b.textContent=k.name+(k.git?'  (git)':'');b.onclick=()=>go(k.path);list.append(b)}
   }
   up.onclick=()=>parent&&go(parent);
@@ -352,32 +408,36 @@ function pickFolder(start){
             return JSONResponse({"error": str(ex)}, status_code=400)
 
     def src_rows(node: str = "") -> str:
-        """Folder table rows (Settings tab: the default list; a node page: that node's list)."""
+        """Folder table rows (Settings tab: the default list; a node page: that node's list). Every control is one click."""
         nd = f'<input type=hidden name=node value="{e(node)}">' if node else ""
         rows = ""
         for src in sources.load(node or None):
             p = e(src.path)
-            miss = "" if src.exists else ' <span class=down>(folder not found, skipped)</span>'
-            rows += (f'<tr><td><a href=# title="browse from this folder" onclick="pickFolder(this.textContent);return false"><code>{p}</code></a>{miss}<td>{"/src/" + e(src.mount_name) if src.exists else "-"}'
-                     f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=mode><input type=hidden name=path value="{p}">'
-                     f'<select name=mode onchange="this.form.submit()"><option value=ro {"selected" if src.mode == "ro" else ""}>read-only'
-                     f'<option value=rw {"selected" if src.mode == "rw" else ""}>read-write (EC2)</select></form>'
+            miss = "" if src.exists else ' <span style="color:var(--bad)">(folder not found, skipped)</span>'
+            other = "rw" if src.mode == "ro" else "ro"
+            mode = (f'<form method=post action=/settings/sources>{nd}<input type=hidden name=action value=mode><input type=hidden name=path value="{p}">'
+                    + chip("c-idle" if src.mode == "ro" else "c-warn", "read-only" if src.mode == "ro" else "read-write (EC2)", "⇄",
+                           title="Click to switch to " + ("read-write (EC2 sessions only)" if other == "rw" else "read-only"),
+                           attrs=f'name=mode value={other}') + '</form>')
+            rows += (f'<tr><td><a href=# title="browse from this folder" onclick="pickFolder(this.textContent);return false"><code>{p}</code></a>{miss}'
+                     f'<td>{"/src/" + e(src.mount_name) if src.exists else "-"}<td>{mode}'
                      f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=toggle><input type=hidden name=path value="{p}">'
-                     f'<input type=checkbox {"checked" if src.enabled else ""} onchange="this.form.submit()"></form>'
-                     f'<td><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=remove><input type=hidden name=path value="{p}">'
-                     f'<button>Remove</button></form></tr>')
-        return rows or '<tr><td colspan=5><span class=lbl>No folders: agents see only their /workspace.</span></tr>'
+                     f'<input type=checkbox {"checked" if src.enabled else ""} onchange="this.form.submit()" aria-label="Enabled: {p}"></form>'
+                     f'<td style="text-align:right"><form method=post action=/settings/sources>{nd}<input type=hidden name=action value=remove><input type=hidden name=path value="{p}">'
+                     f'<button class="btn danger mini" aria-label="Remove {p}" title="Remove from the list (the folder itself is not touched)">&#x2715;</button></form></tr>')
+        return rows or '<tr><td colspan=5><span class=hint>No folders: agents see only their /workspace.</span></tr>'
 
-    NODE_SRC = """<!doctype html><meta charset=utf-8><title>AirlockAI - {name} sources</title><style>{base_css}body{{font:14px system-ui;margin:0}}
-table{{border-collapse:collapse}}td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}
-.up{{color:#2a9d4a}}.down{{color:#d33}}.lbl{{color:#888}}.err{{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
-form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0 .25rem;border-radius:3px}}</style>
-{nav}<main><p class=err>{error}</p><p><a href=/>&larr; EC2 nodes</a></p><h2>Source code mounted for node {name}</h2>
-<p class=lbl>AI sessions on this node mount these folders as <code>/src/&lt;folder name&gt;</code> (a session on several nodes mounts the folders of all of them).
+    NODE_SRC = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>AirlockAI - {name} sources</title>
+<style>{base_css}{kit_css}body{{font:14px system-ui;margin:0}}
+.lbl{{color:#888}}.err{{color:#d33;padding:.4rem .6rem;border:1px solid #d33;border-radius:6px}}.err:empty{{display:none}}
+.add input{{margin:.2rem}}code{{background:#8882;padding:0 .25rem;border-radius:3px}}</style>
+{nav}<main><p class=err>{error}</p><p><a class=lnk href=/>&larr; EC2 nodes</a></p><h2>Source code mounted for node {name}</h2>
+<p class=hint>AI sessions on this node mount these folders as <code>/src/&lt;folder name&gt;</code> (a session on several nodes mounts the folders of all of them).
 {state} Takes effect for sessions started after the change.</p>
-<table><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th></tr>{src_rows}</table>
-<form method=post action=/settings/sources class=add><input type=hidden name=node value="{name}"><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required> <button type=button onclick="pickFolder()">Browse&hellip;</button>
-<select name=mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button>Add folder</button></form>{reset}{picker}</main>"""
+<div class=tablewrap><table aria-label="Source folders" style="min-width:560px"><thead><tr><th>Folder<th>Mounted as<th>Mode<th>Enabled<th style="text-align:right">Remove</tr></thead><tbody>{src_rows}</tbody></table></div>
+<form method=post action=/settings/sources class="add inline"><input type=hidden name=node value="{name}"><input type=hidden name=action value=add><input name=path id=srcpath placeholder="~/myproject" size=36 required aria-label="Folder path">
+<button type=button class=btn onclick="pickFolder()">Browse&hellip;</button>
+<select name=mode aria-label=Mode><option value=ro>read-only<option value=rw>read-write (EC2)</select> <button class="btn primary">Add folder</button></form>{reset}{picker}{kit}</main>"""
 
     @app.get("/nodes/{name}/sources", response_class=HTMLResponse)
     def node_sources(name: str, error: str = ""):
@@ -387,34 +447,41 @@ form{{display:inline}}.add input{{margin:.2rem}}code{{background:#8882;padding:0
         state = ("This node has its own list." if custom else
                  'This node uses the <a href=/settings>default list</a>; changing it here gives the node its own copy.')
         reset = ('<p><form method=post action=/settings/sources><input type=hidden name=node value="' + e(name) + '">'
-                 '<input type=hidden name=action value=reset><button>Use the default list again</button></form></p>') if custom else ""
-        return NODE_SRC.format(base_css=BASE_CSS, nav=nav_html("ec2"), error=e(error), name=e(name), state=state,
+                 '<input type=hidden name=action value=reset><button class=btn>Use the default list again</button></form></p>') if custom else ""
+        return NODE_SRC.format(base_css=BASE_CSS, kit_css=KIT_CSS, kit=kit_tail(), nav=nav_html("ec2"), error=e(error), name=e(name), state=state,
                                src_rows=src_rows(name), reset=reset, picker=PICKER)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(error: str = ""):
         state, detail = claude_token_status()
         if state in ("env", "file"):
-            auth_box = (f'<span class=up>&#9679; automatic sign-in is on</span> <span class=lbl>({e(detail)}). New sessions start signed in.</span> '
-                        + ('<form method=post action=/auth/claude-token/remove><button onclick="return confirm(\'Remove the saved token?\')">Remove token</button></form>' if state == "file" else ""))
+            auth_box = (f'<div class=line>{chip("c-ok", "automatic sign-in is on")} <span class=hint>({e(detail)}). New sessions start signed in.</span> '
+                        + ('<form method=post action=/auth/claude-token/remove><button class="btn danger" data-arm="Remove the saved token?">'
+                           'Remove token</button></form>' if state == "file" else "") + '</div>')
         else:
-            why = f'<span class=down>{e(detail)}</span> ' if state == "error" else ""
-            auth_box = (f'{why}<span class=down>&#9679; not set up: new sessions will ask you to sign in.</span><br>'
-                        '<span class=lbl>Run <code>claude setup-token</code> in a terminal, sign in, copy the token it prints and paste it here once:</span><br>'
-                        '<form method=post action=/auth/claude-token class=add><input type=password name=token autocomplete=off required size=60 '
-                        'placeholder="token from claude setup-token"><button>Save token</button></form>')
+            why = f'<div style="color:var(--bad)">{e(detail)}</div>' if state == "error" else ""
+            auth_box = (f'{why}<div class=line>{chip("c-idle", "off: each session asks you to log in")} '
+                        '<button type=button class=btn onclick="const f=document.getElementById(\'tokform\');f.hidden=false;f.querySelector(\'input\').focus()">'
+                        'Paste token&hellip;</button></div>'
+                        '<form id=tokform method=post action=/auth/claude-token class="add inline" hidden>'
+                        '<span class=hint>Run <code>claude setup-token</code> in a terminal, sign in, and paste the token it prints:</span>'
+                        '<input type=password name=token autocomplete=off required size=60 placeholder="token from claude setup-token" aria-label="Claude token">'
+                        '<button class="btn primary">Save token</button> <button type=button class=btn data-hide=tokform>Cancel</button></form>')
         lstate, ldetail = node_login_status()
         if lstate in ("env", "memory"):
-            login_box = (f'<span class=up>&#9679; node login is set</span> <span class=lbl>(user <code>{e(ldetail)}</code>, '
-                         f'{"from the USER_NAME / USER_PASSWORD variables of this server" if lstate == "env" else "kept in memory only, forgotten when this server stops"}).</span> '
-                         + ('<form method=post action=/auth/node-login/remove><button>Forget login</button></form>' if lstate == "memory" else ""))
+            src = ("from the USER_NAME / USER_PASSWORD variables of this server" if lstate == "env"
+                   else "kept in memory only, forgotten when this server stops")
+            login_box = (f'<div class=line>{chip("c-ok", "login set for user " + ldetail)} <span class=hint>({src})</span> '
+                         + ('<form method=post action=/auth/node-login/remove><button class=btn>Forget login</button></form>' if lstate == "memory" else "")
+                         + '</div>')
         else:
-            login_box = (f'<span class=down>&#9679; not set: sandbox sessions cannot prepare nodes.</span><br>'
-                         '<form method=post action=/auth/node-login class=add><input name=user autocomplete=username required size=20 placeholder="user name">'
-                         '<input type=password name=password autocomplete=off required size=30 placeholder="password (also the sudo password)">'
-                         '<button>Keep in memory</button></form>')
-        rows = src_rows()
-        return SETTINGS.format(base_css=BASE_CSS, nav=nav_html("settings"), error=e(error), auth_box=auth_box, login_box=login_box, src_rows=rows, picker=PICKER)
+            login_box = ('<div class=line><button type=button class="chip c-bad" onclick="const f=document.getElementById(\'loginform\');f.hidden=false;f.querySelector(\'input\').focus()">'
+                         '<span class=dot></span><span class=t>login missing: sandbox sessions cannot prepare nodes</span><span class=go>set &rarr;</span></button></div>'
+                         '<form id=loginform method=post action=/auth/node-login class="add inline" hidden><input name=user autocomplete=username required size=20 placeholder="user name" aria-label="User name">'
+                         '<input type=password name=password autocomplete=off required size=30 placeholder="password (also the sudo password)" aria-label=Password>'
+                         '<button class="btn primary">Keep in memory</button> <button type=button class=btn data-hide=loginform>Cancel</button></form>')
+        return SETTINGS.format(base_css=BASE_CSS, kit_css=KIT_CSS, kit=kit_tail(), nav=nav_html("settings"), error=e(error), auth_box=auth_box,
+                               login_box=login_box, src_rows=src_rows(), picker=PICKER)
 
     @app.post("/settings/sources")
     def settings_sources(action: str = Form(...), path: str = Form(""), mode: str = Form("ro"), node: str = Form("")):
@@ -540,7 +607,15 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
 
     @app.post("/nodes/bulk-delete")
     def node_bulk_delete(sel: list[str] = Form([])):
-        return back(lambda: session.remove_nodes_checked(config_path, sel))
+        """Sessions on these nodes that are not doing anything are removed first, so a dead agent never pins a node."""
+        def go():
+            stale = [sid for sid in session.dead_sessions("sandbox") + session.dead_sessions("gateway")
+                     if set(session.load_state(sid)["nodes"]) & set(sel)]
+            left = session.remove_many(load_config(config_path), stale) if stale else []
+            session.remove_nodes_checked(config_path, sel)
+            if left:
+                raise ConfigError("deleted. Key and sudo rule may remain on: " + ", ".join(left) + " (run airlock sweep once reachable)")
+        return back(go)
 
     @app.post("/nodes/aws/{action}")
     def nodes_aws(action: str, sel: list[str] = Form([])):
@@ -555,7 +630,15 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
 
     @app.get("/api/nodes/stats")
     def api_nodes_stats():
-        return nodestats.collect(load_config(config_path).nodes)
+        """ssh status per node (cached 15 s), plus the EC2 state from one cached describe-instances (UI_REFACTOR_SPEC 7.3)."""
+        cfg = load_config(config_path)
+        out = {k: dict(v) for k, v in nodestats.collect(cfg.nodes).items()}
+        try:
+            for name, state in awsimport.instance_states(cfg, cfg.nodes).items():
+                out.setdefault(name, {})["ec2_state"] = state
+        except Exception:   # noqa: BLE001 - AWS is optional here; the table then shows ssh status only
+            pass
+        return out
 
     @app.post("/nodes/{name}/mode")
     def node_mode(name: str, mode: str = Form(...)):
@@ -581,26 +664,22 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
             raise HTTPException(404)
         return back(lambda: session.delete_many(ssel, load_config(config_path)))
 
-    @app.post("/sessions/bulk-discard")
-    def sessions_bulk_discard(ssel: list[str] = Form([])):
-        """Force removal of stuck sessions (node unreachable): node access may remain, which is listed in the message."""
-        if not ssel:
-            return back(lambda: (_ for _ in ()).throw(ConfigError("select at least one session")))
+    @app.post("/sessions/bulk-remove")
+    def sessions_bulk_remove(ssel: list[str] = Form([])):
+        """One click: stop if needed, revoke node access, remove. Unreachable nodes do not block it; the leftover is listed."""
         if not all(re.match(r"^[a-f0-9]{6,32}$", x) for x in ssel):
             raise HTTPException(404)
+        return removed(lambda: session.remove_many(load_config(config_path), ssel))
 
-        def go():
-            left, refused = [], []
-            for sid in ssel:
-                try:
-                    left += [f"{sid}/{p['node']}" for p in session.discard_session(sid)]
-                except ConfigError as ex:
-                    refused.append(str(ex))
-            if refused:
-                raise ConfigError("; ".join(refused))
-            if left:
-                raise ConfigError("discarded. Key and sudo rule may remain on: " + ", ".join(left) + " (run airlock sweep when reachable)")
-        return back(go)
+    def removed(fn):
+        try:
+            left = fn()
+        except (ConfigError, RuntimeError) as ex:
+            return RedirectResponse("/?tab=ec2&error=" + quote(str(ex)), status_code=303)
+        if left:
+            msg = "removed. Key and sudo rule may remain on: " + ", ".join(left) + " (run airlock sweep once the node is reachable)"
+            return RedirectResponse("/?tab=ec2&error=" + quote(msg), status_code=303)
+        return RedirectResponse("/?tab=ec2", status_code=303)
 
     @app.post("/sessions/bulk-stop")
     def sessions_bulk_stop(ssel: list[str] = Form([])):
@@ -622,15 +701,46 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
 
     @app.post("/sessions/prune")
     def sessions_prune():
-        return back(session.prune_sessions)
+        """Remove every sandbox session that is not doing anything (stopped, stuck in cleanup, container gone)."""
+        def go():
+            dead = session.dead_sessions("sandbox")
+            return session.remove_many(load_config(config_path), dead) if dead else []
+        return removed(go)
+
+    def start_async(jobs: list, to: str, wait: float = 3.0):
+        """Start sessions in background threads, so the table shows them as "starting… 12s" (UI_REFACTOR_SPEC 7.5). A start
+        that fails within `wait` seconds (no node login, unknown node, refused key) is reported in the banner; a later failure
+        leaves a stopped row that carries its error."""
+        errors: list[str] = []
+
+        def run(label, fn):
+            try:
+                fn()
+            except Exception as ex:   # noqa: BLE001 - shown to the user, never a stack trace
+                errors.append(f"{label}: {ex}" if len(jobs) > 1 else str(ex))
+        threads = [threading.Thread(target=run, args=job, daemon=True) for job in jobs]
+        for t in threads:
+            t.start()
+        deadline = time.time() + wait
+        for t in threads:
+            t.join(max(0.0, deadline - time.time()))
+        pending = sum(t.is_alive() for t in threads)
+        sep = "&" if "?" in to else "?"
+        if errors:
+            return RedirectResponse(to + sep + "error=" + quote("; ".join(errors)), status_code=303)
+        if pending:
+            return RedirectResponse(to + sep + "info=" + quote(f"starting {pending} session{'s' if pending > 1 else ''} (15-40 s)"), status_code=303)
+        return RedirectResponse(to, status_code=303)
 
     @app.post("/sessions")
     def start(nodes: list[str] = Form([]), sel: list[str] = Form([])):
-        """`nodes` comes from a row's Start button, `sel` from the checked rows ("Start session on selected")."""
-        names = nodes or sel
-        if not names:
+        """`nodes`: one session on these nodes (a row's menu, the CLI's multi-node form). `sel`: the ticked rows of the bulk bar,
+        one separate session per node."""
+        if not nodes and not sel:
             return back(lambda: (_ for _ in ()).throw(ConfigError("select at least one node")))
-        return back(lambda: session.start_session(load_config(config_path), names))
+        cfg = load_config(config_path)
+        groups = [nodes] if nodes else [[n] for n in dict.fromkeys(sel)]
+        return start_async([(", ".join(g), lambda g=g: session.start_session(cfg, g)) for g in groups], "/?tab=ec2")
 
     @app.post("/sessions/{sid}/stop")
     def stop(sid: str):
@@ -717,5 +827,5 @@ td,th{{border-bottom:1px solid #8884;padding:.4rem;text-align:left}}.err{{color:
             os.close(fd)
 
     from .ui_prod import make_prod
-    make_prod(app, config_path, nav_html, BASE_CSS, session_cells)
+    make_prod(app, config_path, nav_html, BASE_CSS, start_async)
     return app

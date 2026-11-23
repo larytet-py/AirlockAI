@@ -1,7 +1,8 @@
 """UI of the approval flow (SPEC 7.8): proposals and recent patterns in the PROD tab, the full catalogue in Settings > Access.
 
-Rules for every list here: no buttons in rows. Rows have select checkboxes and the list has one bulk bar (a drop list of
-actions and Apply). Clicking a query's text edits it in place (Ctrl+Enter saves, Esc cancels); clicking a name renames it.
+"Waiting for you" is one card per item, each with its own Approve / For this session / Reject buttons (UI_REFACTOR_SPEC 5.1).
+The pattern lists have select checkboxes and a bulk bar (a drop list of actions and Apply; Remove asks by a second click, never
+confirm()). Clicking a query's text edits it in place (Ctrl+Enter saves, Esc cancels); clicking a name renames it.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from . import usage
 from .config import ConfigError, load_config
 from .patterns import NAME_RE, Pattern, PatternError
 from .patternstore import PatternStore
+from .ui_kit import ARM_JS
 
 e = html.escape
 RECENT_DAYS, RECENT_MIN, PAGE_SIZE = 7, 20, 50
@@ -136,15 +138,23 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
         return known + [n for n in scoped if n not in known]
 
     # ------------------------------------------------------------------ PROD tab: proposals + recently approved
+    def card_actions(value_name: str, value: str, *, session_scope: bool, secrets: str = "", fid: str = "") -> str:
+        """One card's buttons: each posts the existing /prod/waiting/bulk with this one item and its action (UI_REFACTOR_SPEC 5.1)."""
+        return (f'<form method=post action=/prod/waiting/bulk class=acts style="flex-wrap:wrap"{f" id={fid}" if fid else ""}>'
+                f'<input type=hidden name={value_name} value="{e(value)}">{secrets}'
+                '<input name=note placeholder="note for the agent (optional)" size=22 aria-label="Note for the agent">'
+                '<button class="btn primary" name=action value=approve>Approve</button>'
+                + ('<button class=btn name=action value=session title="this call and later calls of the same tool, for this session only">'
+                   'For this session</button>' if session_scope else "")
+                + '<button class="btn danger" name=action value=reject data-arm="Reject?">Reject</button></form>')
+
     def proposals_html(st: PatternStore, cfg) -> str:
-        props = st.proposals("pending")
-        if not props:
-            return ""
+        """New access agents ask for: one card per item."""
         out = ""
-        for pr in props:
+        for pr in st.proposals("pending"):
             prop: A.Proposal = pr["proposal"]
             items = {i["item_id"]: i for i in pr["items"]}
-            rows = ""
+            who = f'session {e(prop.session)}' if prop.session else e(prop.by)
             for iid, kind, it in prop.items():
                 rec = items[iid]
                 if rec["decision"] != "pending":
@@ -153,29 +163,30 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
                 fb = ('<span class=ok>feasible</span>' if feas.get("ok", True) else f'<span class=no>{e(feas.get("reason", ""))}</span>')
                 if feas.get("needs"):
                     fb += f' <span class=tag>needs {e(feas["needs"])}</span>'
-                box = f'<input type=checkbox name=item value="{e(pr["id"])}:{iid}" form=wbulk>'
-                ev = f'<br><small class=lbl>evidence: {e(it.evidence)}</small>' if it.evidence else ""
+                ev = f'<div class=hint>evidence: {e(it.evidence)}</div>' if it.evidence else ""
+                value = f'{pr["id"]}:{iid}'
+                fid = f'w-{e(pr["id"])}-{iid}'
+                secrets = ""
                 if kind == "route":
                     r = it.route
-                    sec = "".join(f'<br><input type=password name="secret_{e(s)}" form=wbulk placeholder="{e(s)} value (stored 0600 on approve)" '
-                                  f'size=40 autocomplete=off>' for s in (r.secret, r.user_secret, r.password_secret)
-                                  if s and "needs" in feas)
-                    rows += (f'<tr><td>{box}<td><span class=tag>route</span><td><b>{e(r.kind)}/{e(r.name)}</b>'
-                             f'<td>{route_text(r)}{sec}{ev}<td>{fb}</tr>')
+                    title, detail = f"New route: {r.kind}/{r.name}", route_text(r)
+                    secrets = "".join(f'<input type=password name="secret_{e(s)}" placeholder="{e(s)} value (stored 0600 on approve)" '
+                                      f'size=30 autocomplete=off aria-label="{e(s)} value">' for s in (r.secret, r.user_secret, r.password_secret)
+                                      if s and "needs" in feas)
                 elif kind == "query":
                     p = it.pattern
-                    q = query_cell(tpl_text(p), {k: v.model_dump(exclude_none=True) for k, v in p.params.items()},
-                                   f"/prod/proposals/{e(pr['id'])}/{iid}/edit")
-                    rows += (f'<tr><td>{box}<td><span class=tag>{e(p.kind)}</span><td><b>{e(p.name)}</b><br><small class=lbl>{e(p.description)}</small>'
-                             f'<br><small class=lbl>route {e(it.route)}{"" if p.risk == "read" else " &middot; <b class=no>write</b>"}</small>'
-                             f'<td>{q}{ev}<td>{fb}</tr>')
+                    title = f"New query: {p.name}"
+                    detail = (f'<div class=hint>{e(p.description)} &middot; {e(p.kind)} &middot; route {e(it.route)}'
+                              f'{"" if p.risk == "read" else " &middot; <b class=no>write</b>"}</div>'
+                              + query_cell(tpl_text(p), {k: v.model_dump(exclude_none=True) for k, v in p.params.items()},
+                                           f"/prod/proposals/{e(pr['id'])}/{iid}/edit"))
                 else:
-                    rows += (f'<tr><td>{box}<td><span class=tag>enable</span><td><b>{e(it.pattern)}</b><td>make it available in {e(prop.env)} '
-                             f'(route {e(it.route)}){ev}<td>{fb}</tr>')
-            who = f'agent, session {e(prop.session)}' if prop.session else e(prop.by)
-            out += (f'<div class=prop><label><input type=checkbox onchange="selProp(this)"> <b>{e(prop.env)}</b></label> '
-                    f'<span class=lbl>{who} &middot; {fmt_ts(prop.created_at)}</span><br><i>{e(prop.task)}</i>'
-                    f'<table><tr><th><th>Item<th>Name<th>Detail<th>Feasibility</tr>{rows}</table></div>')
+                    title, detail = f"Enable: {it.pattern}", f'make it available in {e(prop.env)} (route {e(it.route)})'
+                out += (f'<div class=card><div class=body><div><b>{e(title)}</b> '
+                        f'<span class="chip c-idle"><span class=dot></span><span class=t>new access</span></span> {fb}</div>'
+                        f'<div class=args>{detail}</div>{ev}<div class=hint><i>{e(prop.task)}</i></div>'
+                        f'<div class=hint>{e(prop.env)} &middot; {who} &middot; {fmt_ts(prop.created_at)}</div></div>'
+                        f'{card_actions("item", value, session_scope=False, secrets=secrets, fid=fid)}</div>')
         return out
 
     def recent_html(st: PatternStore, cfg) -> str:
@@ -196,24 +207,22 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
                      f'<td>{fmt_ts(at)}{f"<br><small class=lbl>{e(by)}</small>" if by else ""}{stat_cells(stats.get(p.name))}</tr>')
         return ('<form id=rbulk method=post action=/prod/patterns/bulk class=bulk><b>Selected patterns:</b><select name=action>'
                 '<option value=disable>Disable<option value=enable>Enable<option value=remove>Remove<option value=export>Export YAML</select>'
-                '<button onclick="return this.form.action.value!==\'remove\'||confirm(\'Remove the selected patterns? History stays in the audit log.\')">Apply</button>'
+                '<button data-arm="Remove? History stays in the audit log." data-arm-if="action=remove">Apply</button>'
                 '<span class=lbl>Recently approved only; the full catalogue is in <a href=/settings/access>Settings &rsaquo; Access</a>.</span></form>'
                 f'<div class=scroll><table><tr><th><input type=checkbox onchange="selAll(this,\'sel\')" form=rbulk><th>Name<th>Kind<th>Environments<th>Query'
                 f'<th>Approved{STAT_HEAD}</tr>{rows}</table></div>')
 
     def calls_html() -> str:
         """Mutating calls blocked in a running session until a human decides (one call, or the tool for the session)."""
-        rows = ""
+        out = ""
         for a in gwsession.pending_approvals():
-            rows += (f'<tr><td><input type=checkbox name=call value="{e(a["session"])}:{e(a["id"])}" form=wbulk>'
-                     f'<td>{e(a["environment"])}<br><small class=lbl>session {e(a["session"])} &middot; {fmt_ts(a.get("ts"))}</small>'
-                     f'<td><b>{e(a["tool"])}</b> <span class=tag>{e(a["risk"])}</span>'
-                     f'<td><pre class=json>{e(json.dumps(a["args"], indent=1, default=str))}</pre></tr>')
-        if not rows:
-            return ""
-        return ('<div class=prop><label><input type=checkbox onchange="selAll(this,\'call\')"> <b>Calls blocked right now</b></label> '
-                '<span class=lbl>the agent waits (up to 5 minutes) for this one call to change something</span>'
-                f'<table><tr><th><th>Environment<th>Call<th>Arguments</tr>{rows}</table></div>')
+            risk = "write" if a["risk"] in ("write", "") else a["risk"]
+            out += (f'<div class=card><div class=body><div><b>{e(a["tool"])}</b> '
+                    f'<span class="chip c-warn"><span class=dot></span><span class=t>{e(risk)}, agent is waiting</span></span></div>'
+                    f'<div class=args>{e(json.dumps(a["args"], indent=1, default=str))}</div>'
+                    f'<div class=hint>{e(a["environment"])} &middot; session {e(a["session"])} &middot; {fmt_ts(a.get("ts"))}</div></div>'
+                    f'{card_actions("call", a["session"] + ":" + a["id"], session_scope=True)}</div>')
+        return out
 
     def waiting_html() -> str:
         st = store()
@@ -221,12 +230,11 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
         cfg = load_config(config_path)
         calls, props = calls_html(), proposals_html(st, cfg)
         if not calls and not props:
-            return '<p class=lbl>Nothing is waiting.</p>'
-        groups = calls + (f'<h3>New access requested <small class=lbl>(approving enables it in that environment for every later '
-                          f'session)</small></h3>{props}' if props else "")
-        return ('<form id=wbulk method=post action=/prod/waiting/bulk class=bulk><b>Selected:</b><select name=action>'
-                '<option value=approve>Approve<option value=session>Approve for session (calls)<option value=reject>Reject</select>'
-                '<input name=note placeholder="note for the agent (reject)" size=40><button>Apply</button></form>' + groups)
+            return '<div class=empty>Nothing is waiting. Write calls and new access requests show up here.</div>'
+        return ((f'<h3 style="font-size:.9rem;margin:.6rem 0 0">Calls blocked right now <span class=hint>the agent waits (up to 5 minutes) '
+                 f'for this one call to change something</span></h3>{calls}' if calls else "")
+                + (f'<h3 style="font-size:.9rem;margin:.6rem 0 0">New access requested <span class=hint>approving enables it in that '
+                   f'environment for every later session</span></h3>{props}' if props else ""))
 
     def waiting_count() -> int:
         st = store()
@@ -390,7 +398,7 @@ def make_access(app: FastAPI, config_path, nav_html, base_css: str, back) -> dic
 <form id=abulk method=post action=/prod/patterns/bulk class=bulk><input type=hidden name=to value="{here}"><b>Selected:</b>
 <select name=action><option value=disable>Disable<option value=enable>Enable<option value=remove>Remove<option value=export>Export YAML
 <option value=propose>Propose for environment...</select><select name=env>{env_opts}</select>
-<button onclick="return this.form.action.value!=='remove'||confirm('Remove the selected items? History stays in the audit log.')">Apply</button></form>
+<button data-arm="Remove? History stays in the audit log." data-arm-if="action=remove">Apply</button></form>
 <table><tr><th><input type=checkbox onchange="selAll(this,'sel')"><th>Name<th>Environments<th>Query<th>Approved{stat_head}</tr>{rows}</table>
 <p>{pager}</p>
 <details><summary>Import YAML</summary><form method=post action=/settings/access/import class=add><textarea name=yaml rows=6 cols=90
@@ -461,13 +469,14 @@ placeholder="query_patterns:\\n  - name: ..."></textarea><br><button>Import</but
         env_names = [x.name for x in E.environments(cfg)]
         ktabs = "".join(f'<a class="{"on" if k == kind else ""}" href="/settings/access?kind={k}">{lbl}</a>' for k, lbl in KIND_TABS)
         body = PAGE.format(base_css=base_css, css=CSS, xcss="table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #8884;padding:.35rem;text-align:left;vertical-align:top}"
-                           ".lbl{color:#888}.err{color:#d33}.err:empty{display:none}form{display:inline}",
+                           ".lbl{color:#888}.err{color:#d33}.err:empty{display:none}form{display:inline}"
+                           "button.armed{background:#d33!important;border-color:#d33!important;color:#fff!important}",
                            nav=nav_html("settings"), error=e(error), ktabs=ktabs, kind=e(kind), q=e(q),
                            env_opts="".join(f'<option{" selected" if n == env else ""}>{e(n)}' for n in env_names),
                            en_on="selected" if enabled == "on" else "", en_off="selected" if enabled == "off" else "",
                            s_name="selected" if sort == "name" else "", s_last="selected" if sort == "last_used" else "",
                            s_calls="selected" if sort == "calls" else "", count=f"{n_pat} pattern(s), {len(routes)} route(s)",
-                           here=e(here), stat_head=STAT_HEAD, rows=rows, pager=pager, js=EDIT_JS)
+                           here=e(here), stat_head=STAT_HEAD, rows=rows, pager=pager, js=EDIT_JS + ARM_JS)
         return HTMLResponse(body)
 
     @app.get("/settings/access/pattern/{name}", response_class=HTMLResponse)

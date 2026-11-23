@@ -71,11 +71,12 @@ def test_settings_tab_manages_folders(home, tmp_path):
     p.write_text("version: 1\n")
     c = TestClient(ui.make_app(str(p)), base_url="http://127.0.0.1:8800", follow_redirects=True)
     page = c.get("/settings").text
-    assert "Source code mounted into agents" in page and "No folders" in page
+    assert "Source folders mounted into agents" in page and "No folders" in page
     r = c.post("/settings/sources", data={"action": "add", "path": "~/proj", "mode": "ro"})
     assert "<code>~/proj</code>" in r.text and "/src/proj" in r.text
-    c.post("/settings/sources", data={"action": "mode", "path": "~/proj", "mode": "rw"})
-    assert sources.load()[0].mode == "rw"
+    assert "name=mode value=rw" in r.text and "<select name=mode onchange" not in r.text      # the mode is a chip that toggles
+    r = c.post("/settings/sources", data={"action": "mode", "path": "~/proj", "mode": "rw"})
+    assert sources.load()[0].mode == "rw" and "read-write (EC2)</span>" in r.text
     c.post("/settings/sources", data={"action": "toggle", "path": "~/proj"})
     assert sources.load()[0].enabled is False
     assert "overlaps ~/.ssh" in c.post("/settings/sources", data={"action": "add", "path": "~/.ssh"}).text

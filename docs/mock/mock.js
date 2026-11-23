@@ -2,19 +2,22 @@
 (function () {
   const G = 2 ** 30;
   const nodes = {
-    JaneTestApi: {ip: '10.0.1.11', host: '10.0.1.11', port: 22, up: true, web_up: true, ssh_link_up: true, load1: 0.42, cores: 4,
+    JaneTestApi: {ip: '10.0.1.11', host: '10.0.1.11', port: 22, up: true, web_up: true, ssh_link_up: true, ec2_state: 'running',
+      load1: 0.42, load5: 0.51, load15: 0.48, tasks: '2/913', cores: 4,
       disks: [{mount: '/', pct: '61%', used: 29.3 * G, size: 48 * G}, {mount: '/data', pct: '34%', used: 68 * G, size: 200 * G}]},
     JaneTestGateway: {ip: '10.0.3.20', host: 'i-0fedcba9876543210.dev.example.com', port: 22, up: true, web_up: true, ssh_link_up: true,
-      load1: 2.91, cores: 2, disks: [{mount: '/', pct: '88%', used: 42.2 * G, size: 48 * G}]},
+      ec2_state: 'running', load1: 2.91, load5: 2.4, load15: 1.7, tasks: '5/1204', cores: 2, disks: [{mount: '/', pct: '88%', used: 42.2 * G, size: 48 * G}]},
     LoadTest01: {ip: '10.0.4.8', host: 'i-0123456789abcdef0.dev.example.com', port: 22, up: false, web_up: false, ssh_link_up: false,
-      error: 'timeout after 12s'},
-    PaymentsSandbox: {ip: '10.0.2.37', host: '10.0.2.37', port: 22, up: true, load1: 0.08, cores: 8,
-      disks: [{mount: '/', pct: '22%', used: 21.1 * G, size: 96 * G}]},
+      ec2_state: 'stopped', error: 'timeout after 12s'},
+    PaymentsSandbox: {ip: '10.0.2.37', host: '10.0.2.37', port: 22, up: true, ec2_state: 'running', load1: 0.08, load5: 0.05, load15: 0.01,
+      tasks: '1/310', cores: 8, disks: [{mount: '/', pct: '22%', used: 21.1 * G, size: 96 * G}]},
   };
   const sessions = {
-    '3f2a91c4': {running: true, egress_up: true, cpu: '3.4%', mem: '412 MB', workspace: '18.2 MB'},
-    'b71e05d8': {running: false, egress_up: false, cpu: '-', mem: '-', workspace: '2.1 MB'},
-    'c9d4e612': {running: true, egress_up: true, cpu: '1.1%', mem: '298 MB', workspace: '640 KB'},
+    '3f2a91c4': {status: 'running', running: true, egress_up: true, cpu: '3.4%', mem: '412 MB', workspace: '18.2 MB'},
+    'b71e05d8': {status: 'stopped', running: false, egress_up: false, cpu: '-', mem: '-', workspace: '2.1 MB'},
+    'e5a0d771': {status: 'running', running: false, egress_up: false, cpu: '-', mem: '-', workspace: '310 KB'},
+    'c9d4e612': {status: 'running', running: true, egress_up: true, cpu: '1.1%', mem: '298 MB', workspace: '640 KB'},
+    '4b17aa03': {status: 'needs_cleanup', running: false, egress_up: false, cpu: '-', mem: '-', workspace: '12 KB'},
   };
   const clusters = {staging: {up: true, nodes: 4, ms: 212}, production: {up: true, nodes: 9, ms: 187}};
   const dirs = {
@@ -51,7 +54,6 @@
     if (b) setTimeout(() => { b.disabled = false; b.textContent = t; }, 1500);
   }, true);
   HTMLFormElement.prototype.submit = function () { notice(); };
-  window.confirm = () => true;   // the real UI confirms destructive actions; in the mock nothing happens anyway
   document.addEventListener('click', e => {
     const a = e.target.closest('a[href="#"]');
     if (a && !a.onclick && !a.getAttribute('onclick')) { e.preventDefault(); notice(); }

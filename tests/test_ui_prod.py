@@ -58,14 +58,14 @@ def fake_session(tmp, sid, mode, status="running", **kw):
 def test_two_tabs_on_the_left_and_choice_is_remembered(client):
     ec2 = client.get("/?tab=ec2").text
     assert 'href="/?tab=ec2"' in ec2 and 'href="/prod"' in ec2 and ">EC2" in ec2 and ">PROD" in ec2
-    assert "<h2>Nodes</h2>" in ec2 and "JohnTestApi" in ec2 and "Clusters" not in ec2
+    assert "<h2>Nodes <span" in ec2 and "JohnTestApi" in ec2 and "Clusters" not in ec2
     prod = client.get("/prod").text
-    assert "<h2>Clusters" in prod and "<h2>Nodes</h2>" not in prod and "JohnTestApi" not in prod
+    assert "<h2>Clusters" in prod and "<h2>Nodes <span" not in prod and "JohnTestApi" not in prod
     assert 'class="tab prod on"' in prod and 'class="tab ec2 on"' not in prod
     # the last tab is remembered: "/" now lands on PROD, "/?tab=ec2" goes back
     assert "<h2>Clusters" in client.get("/").text
-    assert "<h2>Nodes</h2>" in client.get("/?tab=ec2").text
-    assert "<h2>Nodes</h2>" in client.get("/").text
+    assert "<h2>Nodes <span" in client.get("/?tab=ec2").text
+    assert "<h2>Nodes <span" in client.get("/").text
 
 
 def test_prod_lists_local_kubectl_contexts_not_ec2_nodes(client):
@@ -82,16 +82,41 @@ def test_prod_lists_local_kubectl_contexts_not_ec2_nodes(client):
     assert stats["uat"]["up"] is True and stats["prod-eu"]["up"] is False and stats["kind-dev"]["nodes"] == 3
 
 
-def test_no_row_buttons_only_checkboxes_and_bulk_actions(client):
+def test_cluster_rows_have_chips_a_menu_and_a_bulk_bar(client):
+    import re
     page = client.get("/prod").text
-    bar, rows = page.split("<h2>Clusters")[1].split("<table id=envs>")[0], page.split("<table id=envs>")[1].split("</table>")[0]
-    assert "Start session on selected" in bar and "Remove from list" not in bar and "Register selected" not in bar   # bulk bar sits above the table
-    assert "<button" not in rows.replace("<button>Save</button>", "").replace("<button>Set secret</button>", "").replace("<button>Save tools</button>", "")
-    assert "name=ctx" not in rows and 'name=sel value="uat"' in rows
+    rows = page.split("<table id=envs")[1].split("</table>")[0]
+    row = re.search(r'<tr data-kind=env data-key="uat".*?</tr>', rows, re.S).group(0)
+    assert 'class=rowsel name=sel value="uat"' in row and "name=ctx" not in row
+    assert 'action="/prod/envs/uat/rename"' in row                                       # click-to-edit name
+    assert 'name=tool value="kubernetes"><button class="chip c-ok" name=mode value=approve_writes' in row   # chip: read -> approve_writes
+    assert 'name=tool value="airflow"><button class="chip c-idle" name=mode value=read' in row
+    menu = row.split("class=menu")[1]
+    for item in ("Start session", "Set secret", "Refresh kubectl token", "Remove from list"):
+        assert item in menu
+    assert 'data-arm="Remove from the list?"' in menu and "confirm(" not in page
+    bar = page.split("class=bbar data-for=env")[1].split("</div>")[0]
+    assert 'data-labeln="Start {n} sessions"' in bar and "/prod/envs/refresh" in bar
     # every local kubectl context is an environment: no separate registration, a rescan adds new ones
     assert {e.name for e in envs.environments(C.load_config(client.cfg))} == {"uat"}
     client.post("/prod/rescan")
     assert {e.name for e in envs.environments(C.load_config(client.cfg))} == {"uat", "kind-dev", "prod-eu"}
+
+
+def test_a_tool_chip_saves_only_that_tool(client):
+    client.post("/prod/envs/uat/tools", data={"on_kubernetes": "1", "cfg_kubernetes": "namespaces=app", "on_slack": "1",
+                                               "cfg_slack": "channels=alerts|ops"})
+    client.post("/prod/envs/uat/tools", data={"tool": "kubernetes", "mode": "approve_writes"})
+    e = envs.environment(C.load_config(client.cfg), "uat")
+    assert e.tool("kubernetes") == {"namespaces": ["app"], "mode": "approve_writes"}   # its settings stay
+    assert e.tool("slack")["channels"] == ["alerts", "ops"]                             # the other tools are unchanged
+    client.post("/prod/envs/uat/tools", data={"tool": "airflow", "mode": "read"})
+    client.post("/prod/envs/uat/tools", data={"tool": "kubernetes", "mode": "off"})
+    e = envs.environment(C.load_config(client.cfg), "uat")
+    assert e.tool_names() == ["slack", "airflow"] and e.tool("airflow") == {"mode": "read"}
+    assert "no approve_writes mode" in client.post("/prod/envs/uat/tools", data={"tool": "slack", "mode": "approve_writes"}).text
+    assert "unknown tool" in client.post("/prod/envs/uat/tools", data={"tool": "postgres", "mode": "read"}).text
+    assert envs.environment(C.load_config(client.cfg), "uat").tool_names() == ["slack", "airflow"]
 
 
 def test_sessions_are_separated_by_tab(client):
@@ -153,7 +178,7 @@ def test_secret_entry_is_masked_and_stored_0600(client, monkeypatch):
     f = client.tmp / "secrets" / "uat" / "secrets.env"
     assert f.read_text().strip() == "PG_DSN=postgres://u:TopSecret@db/x" and oct(f.stat().st_mode)[-3:] == "600"
     page = client.get("/prod").text
-    assert "TopSecret" not in page and "present" in page
+    assert "TopSecret" not in page and "secrets 1" in page
     assert "TopSecret" not in client.cfg.read_text()
 
 
@@ -184,7 +209,9 @@ def test_proposal_is_approved_with_checkboxes_and_the_agent_is_told(client):
     assert "1 waiting" in client.get("/prod").text                             # badge on the PROD tab
     frag = client.get("/prod/waiting-fragment").text
     assert "New access requested" in frag and "orders/models.py:12" in frag and f'value="{pid}:q0"' in frag
-    assert bulk_buttons(frag) == 1                                             # one bulk bar, no buttons in rows
+    card = frag.split("class=card")[1]
+    assert card.count("name=action value=") == 2 and "For this session" not in card   # Approve, Reject (two clicks); no session scope
+    assert 'data-arm="Reject?"' in card
     st = patternstore.PatternStore()
     assert st.list(env="uat", enabled=True) == []                              # nothing runs before approval
     client.post("/prod/waiting/bulk", data={"item": f"{pid}:q0", "action": "approve"})
@@ -315,9 +342,9 @@ def test_approval_queue_in_the_ui(client):
             break
         import time; time.sleep(0.1)
     page = client.get("/prod").text
-    assert "Calls blocked right now" in page and "ops.docker-purge" in page and "Approve for session" in page
+    assert "Calls blocked right now" in page and "ops.docker-purge" in page and "For this session" in page
     frag = client.get("/prod/waiting-fragment").text
-    assert bulk_buttons(frag) == 1                                             # same bulk bar as proposals, no row buttons
+    assert frag.count("class=card") == 1 and "destructive, agent is waiting" in frag and frag.count("name=action value=") == 3
     aid = gateway.list_approvals(inbox)[0]["id"]
     assert "bad session id" in client.post("/prod/waiting/bulk", data={"call": f"../x:{aid}", "action": "approve"}).text
     client.post("/prod/waiting/bulk", data={"call": f"bbbbbb22:{aid}", "action": "approve"})
@@ -380,14 +407,15 @@ def test_session_names_and_ssh_command(client, monkeypatch):
     fake_session(client.tmp, "bbbbbb22", "gateway", environment="uat", ssh=True)
     fake_session(client.tmp, "cccccc33", "gateway", environment="uat")                      # started before ssh existed: no command
     ec2, prod = client.get("/?tab=ec2").text, client.get("/prod").text
-    assert "ssh -F" not in ec2 and "ssh -F" not in prod and "class=cmd" not in ec2 + prod   # no ssh command in the Actions column
+    row = lambda page, sid: page.split(f'data-key="{sid}"')[1].split("</tr>")[0]
+    assert f"<span class=ct>ssh -F {sshaccess.CONFIG} aaaaaa11</span>" in row(ec2, "aaaaaa11")   # copy pill: works as pasted
     assert 'onclick="rn(this)">aaaaaa11' in ec2                                              # click the id to name it
-    assert '<span class=lbl title="not editable: this is the ssh command prefix">ssh</span> <b class=nm' in ec2   # fixed "ssh" before the name
-    assert 'ssh</span> <b' not in prod.split('data-sid="cccccc33"')[1].split("</tr>")[0]                  # no prefix without ssh support
+    assert "class=ct" not in row(prod, "cccccc33")                                            # no pill without ssh support
+    sshaccess.setup_include()
     client.post("/sessions/bbbbbb22/name", data={"name": "uat-debug"})
     assert session.load_state("bbbbbb22")["name"] == "uat-debug"
     prod = client.get("/prod").text
-    assert ">uat-debug</b>" in prod and "ssh -F" not in prod
+    assert ">uat-debug</span>" in prod and "<span class=ct>ssh uat-debug</span>" in prod and "ssh -F" not in prod
     conf = sshaccess.CONFIG.read_text()
     assert "Host aaaaaa11\n" in conf and "Host bbbbbb22 uat-debug\n" in conf and "cccccc33" not in conf
     assert "ProxyCommand docker exec -i air-agent-bbbbbb22 /usr/sbin/sshd -i" in conf and "User agent" in conf

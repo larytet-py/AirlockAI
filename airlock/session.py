@@ -434,6 +434,50 @@ def discard_session(sid: str) -> list[dict]:
     return left
 
 
+def remove_session(cfg: Config, sid: str) -> list[dict]:
+    """One-click "Stop & remove": whatever state the session is in, it leaves the list.
+
+    1. Not yet stopped (running, starting, stopping, needs_cleanup, container already dead): stop it, which removes the
+       containers and tries to revoke the key and sudo rule on every node.
+    2. Revocation succeeded: delete the record and workspace (the normal path).
+    3. A node could not be reached (EC2 instance stopped, no route): force-discard anyway and return what may still be on
+       the node, `[{"node", "error"}]`. The key line carries an expiry marker and `airlock sweep` removes it later."""
+    st = load_state(sid)
+    if st["status"] != "stopped":
+        st = stop_session(cfg, sid)
+    if st["status"] == "stopped":
+        delete_session(sid)
+        return []
+    return discard_session(sid)
+
+
+def remove_many(cfg: Config, ids: list[str]) -> list[str]:
+    """Group "Stop & remove". Returns a note per node where access may remain (empty when everything was clean)."""
+    if not ids:
+        raise ConfigError("select at least one session")
+    left, failed = [], []
+    for sid in ids:
+        try:
+            left += [f"{sid}/{p['node']}" for p in remove_session(cfg, sid)]
+        except Exception as e:   # one bad record must not block the rest of the selection
+            failed.append(f"{sid}: {redact(str(e))}")
+    if failed:
+        raise ConfigError(f"removed {len(ids) - len(failed)}; failed: " + "; ".join(failed))
+    return left
+
+
+def dead_sessions(mode: str = "sandbox") -> list[str]:
+    """Sessions of `mode` that are not doing anything: stopped, stuck in cleanup, running with the agent container gone, or
+    "starting" for longer than any start takes (the controller died mid-start). A start in progress is left alone."""
+    stats, now = session_stats(), time.time()
+
+    def dead(s: dict) -> bool:
+        if s["status"] == "starting":
+            return now - s.get("started_at", 0) > 600
+        return s["status"] != "running" or not stats.get(s["id"], {}).get("running")
+    return [s["id"] for s in list_sessions() if s.get("mode", "sandbox") == mode and dead(s)]
+
+
 def prune_sessions() -> list[str]:
     done = []
     for st in list_sessions():
@@ -513,7 +557,7 @@ def remove_nodes_checked(config_path, names: list[str]) -> Config:
         sources.reset_node(n)
     if busy:
         detail = "; ".join(f"{n} (session {', '.join(s)})" for n, s in busy.items())
-        raise ConfigError(f"deleted {len(free)}; not deleted (stop sessions first): {detail}")
+        raise ConfigError(f"deleted {len(free)}; not deleted, a running AI session uses it (Stop & remove the session first): {detail}")
     return cfg
 
 
@@ -567,7 +611,7 @@ def session_stats() -> dict[str, dict]:
         agent_up = f"air-agent-{sid}" in up
         cpu, mem = stats.get(f"air-agent-{sid}", ("", ""))
         ws = s.get("workspace")
-        out[sid] = {"running": agent_up, "egress_up": f"air-egress-{sid}" in up,
+        out[sid] = {"status": s["status"], "running": agent_up, "egress_up": f"air-egress-{sid}" in up,
                     "cpu": cpu or "-", "mem": mem or "-",
                     "workspace": human_bytes(dir_size(ws)) if ws and os.path.isdir(ws) else "-"}
     return out

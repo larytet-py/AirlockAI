@@ -11,6 +11,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 
 from .audit import Audit
@@ -184,6 +186,7 @@ def control(cfg: Config, nodes: list[Node], action: str) -> list[str]:
             region = n.region or (regions[0] if len(regions) == 1 else None)
             groups.setdefault(region, []).append((n, iid))
     audit = Audit("aws-control")
+    forget_states()   # the next stats refresh asks AWS again, so the chip shows "starting…" / "stopping…" right away
     for region, items in groups.items():
         ids = [iid for _, iid in items]
         try:
@@ -195,5 +198,66 @@ def control(cfg: Config, nodes: list[Node], action: str) -> list[str]:
             ok, detail = False, str(ex)
         for n, iid in items:
             lines.append(f"{n.name}: {action} requested" if ok else f"{n.name}: {action} failed ({detail})")
+            if ok and action == "reboot":
+                _rebooting[iid] = time.time()
             audit.log("controller", "aws.control", node=n, ec2=iid, region=region, action=action, ok=ok)
     return lines
+
+
+# --- EC2 state per node for the nodes table (docs/UI_REFACTOR_SPEC.md 7.3): one cached describe-instances, not one per node
+
+STATE_TTL, REBOOT_SHOWN = 60.0, 90.0
+_states: dict = {"at": 0.0, "key": None, "map": {}}
+_states_lock = threading.Lock()
+_rebooting: dict[str, float] = {}
+STATE_RE = re.compile(r"^[a-z-]{1,20}$")
+
+
+def forget_states() -> None:
+    with _states_lock:
+        _states["at"] = 0.0
+
+
+def instance_states(cfg: Config, nodes: list[Node]) -> dict[str, str]:
+    """{node name: EC2 state} for nodes with an instance id: running, stopped, pending, stopping, rebooting (shown for a
+    short while after a reboot request). One `describe-instances` call per region, at most once a minute (and right after a
+    start, stop or reboot). Nodes without an instance id, and any AWS failure, give no entry: the table then shows ssh status only."""
+    if not available():
+        return {}
+    regions = settings(cfg).get("regions") or []
+    by_region: dict[str | None, list[str]] = {}
+    ids: dict[str, str] = {}
+    for n in nodes:
+        iid = n.resolved_instance_id()
+        if iid:
+            ids[n.name] = iid
+            by_region.setdefault(n.region or (regions[0] if len(regions) == 1 else None), []).append(iid)
+    if not ids:
+        return {}
+    key = tuple(sorted((str(r), tuple(sorted(v))) for r, v in by_region.items()))
+    with _states_lock:
+        fresh = _states["key"] == key and time.time() - _states["at"] < STATE_TTL
+        found = dict(_states["map"]) if fresh else None
+    if found is None:
+        found = {}
+        profile = settings(cfg).get("profile")
+        for region, iids in by_region.items():
+            try:
+                raw = _aws(["ec2", "describe-instances", "--instance-ids", *sorted(set(iids)), *(["--region", region] if region else []),
+                            "--query", "Reservations[].Instances[].[InstanceId,State.Name]"], profile, timeout=20)
+                for iid, state in json.loads(raw or "[]"):
+                    if isinstance(state, str) and STATE_RE.match(state):
+                        found[iid] = state
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):   # includes AwsAuthError: no state, no error banner
+                continue
+        with _states_lock:
+            _states.update(at=time.time(), key=key, map=found)
+    now = time.time()
+    out = {}
+    for name, iid in ids.items():
+        st = found.get(iid)
+        if st == "running" and now - _rebooting.get(iid, 0) < REBOOT_SHOWN:
+            st = "rebooting"
+        if st:
+            out[name] = st
+    return out

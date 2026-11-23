@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -23,6 +24,8 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 OUT = Path(__file__).resolve().parent
+TOKEN = secrets.token_urlsafe(24)   # the UI refuses requests without its per-start token (SECURITY.md F01)
+AUTH = {"Cookie": f"airlock_ui={TOKEN}"}
 REPO = OUT.parent.parent
 
 CONFIG = """version: 1
@@ -109,6 +112,8 @@ SESSIONS = [
     {"id": "3f2a91c4", "name": "checkout-bug", "status": "running", "ssh": True, "nodes": ["JaneTestApi", "JaneTestGateway"],
      "allow": ["10.0.1.11:22", "10.0.3.20:22", *ALLOW]},
     {"id": "b71e05d8", "status": "stopped", "nodes": ["LoadTest01"], "allow": ["10.0.4.8:22", *ALLOW]},
+    {"id": "e5a0d771", "status": "running", "ssh": True, "nodes": ["JaneTestApi"], "allow": ["10.0.1.11:22", *ALLOW]},   # agent container gone
+    {"id": "4b17aa03", "mode": "gateway", "status": "needs_cleanup", "environment": "staging", "tools": ["kubernetes"]},
     {"id": "c9d4e612", "name": "prod-latency", "mode": "gateway", "status": "running", "ssh": True, "environment": "production",
      "tools": ["kubernetes", "jira", "query"]},
 ]
@@ -163,6 +168,8 @@ def setup(d: Path) -> dict:
         {"id": "a1", "state": "pending", "tool": "kubernetes.rollout_restart", "risk": "write", "ts": time.time() - 40,
          "args": {"namespace": "shop", "deployment": "checkout-api"}}))
     (inbox / "proposals" / "p1.json").write_text(json.dumps(PROPOSAL))
+    (fake / ".ssh").mkdir(parents=True)                          # as after `airlock ssh setup`: the pills show `ssh <name>`
+    (fake / ".ssh" / "config").write_text(f"Include {home / 'ssh_config'}\n")
     for r in ("shop-api", "shop-web", "infra"):
         (fake / "src" / r).mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(fake / "src" / r)], check=True)
@@ -188,7 +195,7 @@ a.log('agent', 'approval.requested', tool='kubernetes.rollout_restart', args={'n
 
 def post(base: str, path: str, data: dict) -> None:
     from urllib.parse import urlencode
-    req = urllib.request.Request(base + path, data=urlencode(data).encode(), headers={"Origin": base})
+    req = urllib.request.Request(base + path, data=urlencode(data).encode(), headers={"Origin": base, **AUTH})
     try:
         urllib.request.urlopen(req)
     except urllib.error.HTTPError as e:
@@ -197,7 +204,7 @@ def post(base: str, path: str, data: dict) -> None:
 
 
 def get(base: str, path: str) -> tuple[str, str]:
-    with urllib.request.urlopen(base + path) as r:
+    with urllib.request.urlopen(urllib.request.Request(base + path, headers=AUTH)) as r:
         return r.headers.get_content_type(), r.read().decode()
 
 
@@ -275,7 +282,7 @@ def main() -> None:
     base = f"http://127.0.0.1:{port}"
     env = setup(d)
     srv = subprocess.Popen([sys.executable, "-c",
-                            f"import uvicorn; from airlock.ui import make_app; uvicorn.run(make_app(), host='127.0.0.1', port={port}, log_level='warning')"],
+                            f"import uvicorn; from airlock.ui import make_app; uvicorn.run(make_app(ui_token={TOKEN!r}), host='127.0.0.1', port={port}, log_level='warning')"],
                            env=env, cwd=REPO)
     try:
         for _ in range(50):

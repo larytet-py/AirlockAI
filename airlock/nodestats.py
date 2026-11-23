@@ -1,4 +1,4 @@
-"""Live node status for the UI: reachable, 1-minute load average, disk use. One ssh call per node, run in parallel."""
+"""Live node status for the UI: reachable, load averages (1, 5, 15 min) and tasks, disk use. One ssh call per node, run in parallel."""
 from __future__ import annotations
 
 import ipaddress
@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 MOUNT_RE = re.compile(r"^/[A-Za-z0-9_./-]{0,200}$")
 PCT_RE = re.compile(r"^\d{1,3}%$")
+TASKS_RE = re.compile(r"^\d{1,7}/\d{1,7}$")
 
 from . import nodeaccess, runner
 from .config import ConfigError, Node
@@ -25,13 +26,18 @@ _lock = threading.Lock()
 
 
 def parse(out: str) -> dict:
-    load1, cores, disks, seen = None, None, [], set()
+    load1 = load5 = load15 = tasks = None
+    cores, disks, seen = None, [], set()
     for ln in out.splitlines():
         parts = ln.split()
         if not parts:
             continue
         if load1 is None and len(parts) == 5 and parts[3].replace("/", "", 1).isdigit() and parts[0].replace(".", "", 1).isdigit():
-            load1 = float(parts[0])  # /proc/loadavg: 1m 5m 15m running/total lastpid
+            # /proc/loadavg: 1m 5m 15m running/total lastpid. Plain numbers only: the node is not trusted.
+            load1 = float(parts[0])
+            load5 = float(parts[1]) if parts[1].replace(".", "", 1).isdigit() else None
+            load15 = float(parts[2]) if parts[2].replace(".", "", 1).isdigit() else None
+            tasks = parts[3] if TASKS_RE.match(parts[3]) else None
         elif parts[0] == "CORES" and len(parts) == 2 and parts[1].isdigit():
             cores = int(parts[1])
         elif len(parts) >= 6 and parts[1].isdigit() and parts[2].isdigit() and parts[5].startswith("/"):
@@ -43,7 +49,7 @@ def parse(out: str) -> dict:
             mount = parts[5] if MOUNT_RE.match(parts[5]) else "(unprintable mount name)"
             pct = parts[4] if PCT_RE.match(parts[4]) else "-"
             disks.append({"mount": mount, "used": int(parts[2]) * 1024, "size": int(parts[1]) * 1024, "pct": pct})
-    return {"load1": load1, "cores": cores, "disks": disks}
+    return {"load1": load1, "load5": load5, "load15": load15, "tasks": tasks, "cores": cores, "disks": disks}
 
 
 def resolve_ip(host: str) -> str | None:
